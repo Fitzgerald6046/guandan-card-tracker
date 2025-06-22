@@ -95,43 +95,36 @@ export const CardImage: React.FC<CardImageProps> = ({
   className = ''
 }) => {
   const displayName = propDisplayName || getCardDisplayName(rank);
-  const suitSymbol = getSuitSymbol(suit);
-  const suitColor = getSuitColor(suit);
   const isJoker = rank === 15;
   
-  // 根据尺寸设置SVG尺寸
+  // 根据尺寸设置方形尺寸
   const getSvgSize = () => {
     switch (size) {
-      case 'tiny': return { width: 20, height: 30, viewBox: '0 0 24 36' };
-      case 'small': return { width: 30, height: 45, viewBox: '0 0 36 54' };
-      case 'large': return { width: 60, height: 90, viewBox: '0 0 72 108' };
-      default: return { width: 40, height: 60, viewBox: '0 0 48 72' };
+      case 'tiny': return { width: 24, height: 24, viewBox: '0 0 24 24' };
+      case 'small': return { width: 32, height: 32, viewBox: '0 0 32 32' };
+      case 'large': return { width: 48, height: 48, viewBox: '0 0 48 48' };
+      default: return { width: 40, height: 40, viewBox: '0 0 40 40' };
     }
   };
   
   const svgSize = getSvgSize();
   
-  // 根据尺寸调整字体大小
+  // 根据尺寸调整字体大小（方形适配）
   const getFontSizes = () => {
     switch (size) {
       case 'tiny': return { corner: 6, center: 14 };
-      case 'small': return { corner: 7, center: 18 };
-      case 'large': return { corner: 12, center: 32 };
-      default: return { corner: 8, center: 24 };
+      case 'small': return { corner: 8, center: 18 };
+      case 'large': return { corner: 12, center: 28 };
+      default: return { corner: 10, center: 22 };
     }
   };
   
   const fontSizes = getFontSizes();
   
-  // 卡牌背景色
-  const cardBg = isSelected ? '#dbeafe' : '#ffffff';
-  const borderColor = isSelected ? '#3b82f6' : remainingCount > 0 ? '#d1d5db' : '#e5e7eb';
-  const borderWidth = isSelected ? '3' : '2';
-  
   return (
     <div
-      className={`relative cursor-pointer transition-all transform hover:scale-105 ${
-        isSelected ? 'scale-105 shadow-lg' : 'hover:shadow-md'
+      className={`relative cursor-pointer transition-all ${
+        isSelected ? 'transform scale-105' : 'hover:transform hover:scale-102'
       } ${remainingCount === 0 ? 'opacity-50 cursor-not-allowed' : ''} ${className}`}
       onClick={remainingCount > 0 ? (e) => onClick?.(e) : undefined}
       onDoubleClick={remainingCount > 0 ? (e) => onDoubleClick?.(e) : undefined}
@@ -140,159 +133,55 @@ export const CardImage: React.FC<CardImageProps> = ({
       onMouseDown={remainingCount > 0 ? (e) => onMouseDown?.(e) : undefined}
       onMouseEnter={onMouseEnter}
     >
-      {/* 卡牌主体 SVG */}
-      <svg
-        width={svgSize.width}
-        height={svgSize.height}
-        viewBox={svgSize.viewBox}
-        className="drop-shadow-sm"
+      {/* 方形卡牌设计 */}
+      <div
+        className={`relative rounded-md border-2 flex items-center justify-center font-bold transition-all ${
+          isSelected 
+            ? 'bg-blue-50 border-blue-500 shadow-lg' 
+            : 'bg-white border-gray-300 shadow-sm hover:shadow-md'
+        } ${isJoker ? 'bg-gradient-to-br from-red-50 to-orange-50' : ''} ${
+          isRankCard && !isWildCard ? 'ring-2 ring-blue-300 ring-opacity-50' : ''
+        }`}
+        style={{
+          width: svgSize.width,
+          height: svgSize.height,
+          minWidth: svgSize.width,
+          minHeight: svgSize.height
+        }}
       >
-        {/* 卡牌背景 */}
-        <rect
-          x="2"
-          y="2"
-          width="44"
-          height="68"
-          rx="6"
-          ry="6"
-          fill={cardBg}
-          stroke={borderColor}
-          strokeWidth={borderWidth}
-        />
-        
-        {/* 王牌特殊处理 */}
-        {isJoker ? (
-          <g>
-            {/* 王字背景 */}
-            <circle cx="24" cy="24" r="12" fill="#fef3c7" stroke="#f59e0b" strokeWidth="2"/>
-            <text
-              x="24"
-              y="30"
-              textAnchor="middle"
-              fontSize="10"
-              fontWeight="bold"
-              fill="#92400e"
-            >
-              {displayName.includes('小') ? '小' : '大'}
-            </text>
-            <text
-              x="24"
-              y="42"
-              textAnchor="middle"
-              fontSize="8"
-              fontWeight="bold"
-              fill="#92400e"
-            >
-              王
-            </text>
-            
-            {/* 配牌标识 */}
-            {isWildCard && (
-              <circle cx="38" cy="8" r="3" fill="#dc2626"/>
-            )}
-          </g>
-        ) : (
-          <g>
-            {/* 左上角数字/字母 */}
-            <text
-              x="6"
-              y="12"
-              fontSize={fontSizes.corner}
-              fontWeight="bold"
-              fill={suitColor}
+        {/* 主要内容 */}
+        <div className="relative w-full h-full flex items-center justify-center">
+          {isJoker ? (
+            // 王牌显示 - 方形适配
+            <div className="text-center leading-none">
+              <div 
+                className="font-black text-red-600 font-extrabold"
+                style={{ fontSize: `${fontSizes.center * 0.7}px` }}
+              >
+                {displayName.includes('小') ? '小王' : '大王'}
+              </div>
+            </div>
+          ) : (
+            // 普通牌显示
+            <div 
+              className={`font-black ${
+                isWildCard ? 'text-red-600 font-extrabold' : 
+                'text-gray-800'
+              }`}
+              style={{ fontSize: `${fontSizes.center}px` }}
             >
               {displayName}
-            </text>
-            
-            {/* 左上角花色 */}
-            <text
-              x="6"
-              y={12 + fontSizes.corner + 2}
-              fontSize={fontSizes.corner + 2}
-              fill={suitColor}
-            >
-              {suitSymbol}
-            </text>
-            
-            {/* 简洁的中心花色 - 只显示花色符号 */}
-            <text
-              x="24"
-              y="40"
-              textAnchor="middle"
-              fontSize={fontSizes.center}
-              fill={suitColor}
-              opacity="0.8"
-            >
-              {suitSymbol}
-            </text>
-            
-            {/* 右下角倒置数字/字母 */}
-            <text
-              x="42"
-              y="62"
-              fontSize={fontSizes.corner}
-              fontWeight="bold"
-              fill={suitColor}
-              transform="rotate(180 42 62)"
-            >
-              {displayName}
-            </text>
-            
-            {/* 右下角倒置花色 */}
-            <text
-              x="42"
-              y="52"
-              fontSize={fontSizes.corner + 2}
-              fill={suitColor}
-              transform="rotate(180 42 52)"
-            >
-              {suitSymbol}
-            </text>
-          </g>
-        )}
-        
-        {/* 级数牌背景高亮 */}
-        {isRankCard && !isWildCard && (
-          <rect
-            x="2"
-            y="2"
-            width="44"
-            height="68"
-            rx="6"
-            ry="6"
-            fill="none"
-            stroke="#3b82f6"
-            strokeWidth="2"
-            strokeDasharray="4,2"
-            opacity="0.6"
-          />
-        )}
-        
-        {/* 配牌红心标识 */}
-        {isWildCard && !isJoker && (
-          <g>
-            <circle cx="38" cy="8" r="4" fill="#dc2626"/>
-            <text
-              x="38"
-              y="12"
-              textAnchor="middle"
-              fontSize="8"
-              fill="white"
-              fontWeight="bold"
-            >
-              ♥
-            </text>
-          </g>
-        )}
-      </svg>
-      
-      
-      {/* 选中状态指示器 */}
-      {isSelected && (
-        <div className="absolute -top-2 -left-2 w-4 h-4 bg-blue-500 rounded-full flex items-center justify-center">
-          <div className="w-2 h-2 bg-white rounded-full" />
+            </div>
+          )}
         </div>
-      )}
+
+
+        {/* 选中状态指示器 - 方形适配 */}
+        {isSelected && (
+          <div className="absolute -top-0.5 -left-0.5 w-2.5 h-2.5 bg-blue-500 rounded-full border border-white shadow-sm">
+          </div>
+        )}
+      </div>
     </div>
   );
 };

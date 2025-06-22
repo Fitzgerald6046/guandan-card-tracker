@@ -312,14 +312,38 @@ function isStraight(cards: Card[], currentRank: CardRank): CardType {
   
   values.sort((a, b) => a - b);
   
-  // 检查是否可以构成连续
+  // 检查普通顺子（不包含A在开头的情况）
   let gaps = 0;
   for (let i = 1; i < values.length; i++) {
     gaps += values[i] - values[i-1] - 1;
   }
   
   // 配牌数量应该能填补所有空隙
-  if (gaps <= wildCardCount) {
+  let isValidStraight = gaps <= wildCardCount;
+  
+  // 检查A2345特殊顺子（A在开头的情况）
+  if (!isValidStraight && values.includes(14)) { // 14 是 A
+    // 将A看作1，重新排序检查
+    const valuesWithLowAce = values.map(v => v === 14 ? 1 : v).sort((a, b) => a - b);
+    let gapsWithLowAce = 0;
+    for (let i = 1; i < valuesWithLowAce.length; i++) {
+      gapsWithLowAce += valuesWithLowAce[i] - valuesWithLowAce[i-1] - 1;
+    }
+    
+    // 检查A2345这样的低位顺子
+    if (gapsWithLowAce <= wildCardCount) {
+      // 确保这是一个有效的低位顺子（A应该在最前面）
+      const minValue = Math.min(...valuesWithLowAce);
+      const maxValue = Math.max(...valuesWithLowAce);
+      
+      // A2345的范围检查：最小值应该是1（A），最大值不应该超过5+配牌数
+      if (minValue === 1 && maxValue <= 5 + wildCardCount) {
+        isValidStraight = true;
+      }
+    }
+  }
+  
+  if (isValidStraight) {
     // 5张顺子默认为同花顺，可以管上5张以下的炸弹
     if (cards.length === 5) {
       return {
