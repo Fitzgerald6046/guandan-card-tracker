@@ -64,6 +64,10 @@ function generatePlayHistory(gameRecord: GameRecord): PlayRecord[] {
   const totalCards = 108; // 两副牌
   const playHistory: PlayRecord[] = [];
   
+  console.log('generatePlayHistory: 开始生成出牌记录');
+  console.log('generatePlayHistory: finalCardOwnership:', finalCardOwnership);
+  console.log('generatePlayHistory: cardsSnapshot长度:', cardsSnapshot?.length || 0);
+  
   // 模拟出牌过程：每轮4个玩家各出一些牌
   const positions: PlayerPosition[] = ['bottom', 'left', 'top', 'right'];
   let roundIndex = 0;
@@ -143,6 +147,9 @@ function generatePlayHistory(gameRecord: GameRecord): PlayRecord[] {
     }
   }
   
+  console.log('generatePlayHistory: 生成的出牌记录数量:', playHistory.length);
+  console.log('generatePlayHistory: 出牌记录示例:', playHistory.slice(0, 3));
+  
   return playHistory;
 }
 
@@ -153,6 +160,8 @@ function generateReplayFrames(gameRecord: GameRecord): ReplayFrame[] {
   const playHistory = generatePlayHistory(gameRecord);
   const frames: ReplayFrame[] = [];
   const positions: PlayerPosition[] = ['bottom', 'left', 'top', 'right'];
+  
+  console.log('generateReplayFrames: 开始生成回放帧，出牌记录数量:', playHistory.length);
   
   // 初始状态
   const initialCardCounts: Record<PlayerPosition, number> = {
@@ -174,39 +183,68 @@ function generateReplayFrames(gameRecord: GameRecord): ReplayFrame[] {
     }
   });
   
-  // 为每个出牌记录生成一帧
-  let currentCardCounts = { ...initialCardCounts };
-  let cardsOnTable: Card[] = [];
-  
-  playHistory.forEach((playRecord, index) => {
-    // 更新牌数
-    currentCardCounts[playRecord.playerPosition] = Math.max(
-      0, 
-      currentCardCounts[playRecord.playerPosition] - playRecord.cards.length
-    );
+  // 如果没有出牌记录，生成一些简单的演示帧
+  if (playHistory.length === 0) {
+    console.log('generateReplayFrames: 没有出牌记录，生成演示帧');
     
-    // 更新桌面牌（只保留最新一轮的牌）
-    if (index % 4 === 0) {
-      cardsOnTable = []; // 新一轮开始，清空桌面
+    const demoFrames = 10;
+    for (let i = 1; i <= demoFrames; i++) {
+      const currentPlayer = positions[(i - 1) % 4];
+      const cardsPlayed = Math.floor(i * 2.7); // 模拟逐步出牌
+      
+      const currentCardCounts = { ...initialCardCounts };
+      positions.forEach(pos => {
+        currentCardCounts[pos] = Math.max(0, 27 - Math.floor(cardsPlayed / 4));
+      });
+      
+      frames.push({
+        frameIndex: i,
+        timestamp: gameRecord.timestamp + (i * 1000),
+        tableState: {
+          cardsOnTable: [], // 简化处理，不显示具体牌
+          currentPlayer,
+          playerCardCounts: currentCardCounts,
+          description: `第${i}轮: ${currentPlayer === 'bottom' ? '我' : 
+                       currentPlayer === 'left' ? '下家' : 
+                       currentPlayer === 'top' ? '对家' : '上家'} 出牌`
+        }
+      });
     }
-    cardsOnTable = [...cardsOnTable, ...playRecord.cards];
+  } else {
+    // 为每个出牌记录生成一帧
+    let currentCardCounts = { ...initialCardCounts };
+    let cardsOnTable: Card[] = [];
     
-    // 下一个玩家
-    const nextPlayerIndex = (positions.indexOf(playRecord.playerPosition) + 1) % 4;
-    const nextPlayer = positions[nextPlayerIndex];
-    
-    frames.push({
-      frameIndex: index + 1,
-      timestamp: playRecord.timestamp,
-      playRecord,
-      tableState: {
-        cardsOnTable: [...cardsOnTable],
-        currentPlayer: nextPlayer,
-        playerCardCounts: { ...currentCardCounts },
-        description: playRecord.description || `${playRecord.playerPosition} 出牌`
+    playHistory.forEach((playRecord, index) => {
+      // 更新牌数
+      currentCardCounts[playRecord.playerPosition] = Math.max(
+        0, 
+        currentCardCounts[playRecord.playerPosition] - playRecord.cards.length
+      );
+      
+      // 更新桌面牌（只保留最新一轮的牌）
+      if (index % 4 === 0) {
+        cardsOnTable = []; // 新一轮开始，清空桌面
       }
+      cardsOnTable = [...cardsOnTable, ...playRecord.cards];
+      
+      // 下一个玩家
+      const nextPlayerIndex = (positions.indexOf(playRecord.playerPosition) + 1) % 4;
+      const nextPlayer = positions[nextPlayerIndex];
+      
+      frames.push({
+        frameIndex: index + 1,
+        timestamp: playRecord.timestamp,
+        playRecord,
+        tableState: {
+          cardsOnTable: [...cardsOnTable],
+          currentPlayer: nextPlayer,
+          playerCardCounts: { ...currentCardCounts },
+          description: playRecord.description || `${playRecord.playerPosition} 出牌`
+        }
+      });
     });
-  });
+  }
   
   // 结束帧
   frames.push({
@@ -215,10 +253,13 @@ function generateReplayFrames(gameRecord: GameRecord): ReplayFrame[] {
     tableState: {
       cardsOnTable: [],
       currentPlayer: 'bottom',
-      playerCardCounts: currentCardCounts,
+      playerCardCounts: frames.length > 1 ? frames[frames.length - 1].tableState.playerCardCounts : initialCardCounts,
       description: '游戏结束'
     }
   });
+  
+  console.log('generateReplayFrames: 生成的回放帧数量:', frames.length);
+  console.log('generateReplayFrames: 第一帧示例:', frames[0]);
   
   return frames;
 }
@@ -246,15 +287,24 @@ export const GameReplayTable: React.FC<GameReplayTableProps> = ({
   replayState,
   onReplayControl
 }) => {
-  const [replayFrames] = useState<ReplayFrame[]>(() => 
-    generateReplayFrames(gameRecord)
-  );
+  const [replayFrames] = useState<ReplayFrame[]>(() => {
+    const frames = generateReplayFrames(gameRecord);
+    console.log('GameReplayTable: 生成的回放帧数量:', frames.length);
+    console.log('GameReplayTable: 第一帧数据:', frames[0]);
+    console.log('GameReplayTable: 游戏记录:', gameRecord);
+    return frames;
+  });
   const [isPlaying, setIsPlaying] = useState(false);
-  const [playbackTimer, setPlaybackTimer] = useState<NodeJS.Timeout | null>(null);
+  const [playbackTimer, setPlaybackTimer] = useState<number | null>(null);
   
   // 当前帧
   const currentFrameIndex = Math.floor(replayState.replayProgress * (replayFrames.length - 1));
   const currentFrame = replayFrames[currentFrameIndex] || replayFrames[0];
+  
+  // 调试信息
+  console.log('GameReplayTable: 当前回放进度:', replayState.replayProgress);
+  console.log('GameReplayTable: 当前帧索引:', currentFrameIndex);
+  console.log('GameReplayTable: 当前帧数据:', currentFrame);
   
   // 播放控制
   const startPlayback = useCallback(() => {
@@ -265,7 +315,7 @@ export const GameReplayTable: React.FC<GameReplayTableProps> = ({
     setIsPlaying(true);
     
     const timer = setInterval(() => {
-      onReplayControl.setProgress(prev => {
+      onReplayControl.setProgress((prev: number) => {
         const newProgress = prev + (0.02 * replayState.replaySpeed); // 更慢的播放速度
         if (newProgress >= 1) {
           setIsPlaying(false);
@@ -303,10 +353,21 @@ export const GameReplayTable: React.FC<GameReplayTableProps> = ({
   
   // 准备玩家显示数据
   const playerDisplayData: PlayerDisplay[] = useMemo(() => {
+    if (!currentFrame || !currentFrame.tableState) {
+      console.warn('GameReplayTable: currentFrame 或 tableState 为空，使用默认数据');
+      return gameRecord.players.map(player => ({
+        position: player.position,
+        name: player.name,
+        cardCount: 27, // 默认值
+        isCurrentPlayer: player.position === 'bottom',
+        team: player.team
+      }));
+    }
+    
     return gameRecord.players.map(player => ({
       position: player.position,
       name: player.name,
-      cardCount: currentFrame.tableState.playerCardCounts[player.position] || 0,
+      cardCount: currentFrame.tableState.playerCardCounts[player.position] || 27,
       isCurrentPlayer: player.position === currentFrame.tableState.currentPlayer,
       team: player.team
     }));
@@ -347,6 +408,21 @@ export const GameReplayTable: React.FC<GameReplayTableProps> = ({
     );
   };
   
+  // 安全检查
+  if (!currentFrame || !currentFrame.tableState) {
+    return (
+      <div className="game-replay-table bg-gradient-to-b from-green-100 to-green-200 rounded-lg shadow-xl p-6 min-h-[600px] flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-red-500 text-lg font-semibold mb-2">回放数据异常</div>
+          <div className="text-gray-600">无法加载回放帧数据，请检查游戏记录</div>
+          <div className="text-sm text-gray-500 mt-2">
+            回放帧数量: {replayFrames.length}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="game-replay-table bg-gradient-to-b from-green-100 to-green-200 rounded-lg shadow-xl p-6 min-h-[600px]">
       {/* 游戏信息头部 */}
@@ -417,13 +493,13 @@ export const GameReplayTable: React.FC<GameReplayTableProps> = ({
               🎴 牌桌中央
             </div>
             <div className="text-green-200 text-sm">
-              {currentFrame.tableState.description}
+              {currentFrame?.tableState?.description || '等待出牌'}
             </div>
           </div>
           
           {/* 桌面上的牌 */}
           <div className="cards-on-table">
-            {currentFrame.tableState.cardsOnTable.length > 0 ? (
+            {currentFrame?.tableState?.cardsOnTable && currentFrame.tableState.cardsOnTable.length > 0 ? (
               <div className="flex flex-wrap justify-center gap-1 max-w-[200px]">
                 {currentFrame.tableState.cardsOnTable.slice(-8).map((card, index) => (
                   <div 
@@ -494,7 +570,7 @@ export const GameReplayTable: React.FC<GameReplayTableProps> = ({
             <div className="flex justify-between text-xs text-gray-500 mt-1">
               <span>0:00</span>
               <span className="text-gray-700 font-medium">
-                帧 {currentFrameIndex} / {replayFrames.length - 1}
+                帧 {currentFrameIndex} / {Math.max(0, replayFrames.length - 1)}
               </span>
               <span>{formatTime(gameRecord.duration)}</span>
             </div>

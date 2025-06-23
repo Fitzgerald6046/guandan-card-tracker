@@ -45,27 +45,60 @@ function generateReplayFrames(gameRecord: GameRecord): ReplayFrame[] {
   
   // 简化版：基于最终状态生成模拟的回放帧
   const totalFrames = 20; // 20个回放帧
-  const frameInterval = duration * 1000 / totalFrames;
+  const frameInterval = Math.max(duration * 1000 / totalFrames, 100); // 至少100ms间隔
   
   // 模拟逐步分配卡牌的过程
   const ownedCards = Object.keys(finalCardOwnership);
-  const cardsPerFrame = Math.ceil(ownedCards.length / totalFrames);
+  
+  // 如果没有出牌记录，使用卡牌快照信息
+  if (ownedCards.length === 0 && cardsSnapshot && cardsSnapshot.length > 0) {
+    // 从卡牌快照中找出已出的牌
+    const playedCards = cardsSnapshot.filter(card => card.isPlayed);
+    playedCards.forEach(card => {
+      // 简单分配：假设按顺序轮流出牌
+      const playerIndex = playedCards.indexOf(card) % 4;
+      const players: PlayerPosition[] = ['bottom', 'left', 'top', 'right'];
+      finalCardOwnership[card.id] = players[playerIndex];
+    });
+  }
+  
+  const updatedOwnedCards = Object.keys(finalCardOwnership);
+  const cardsPerFrame = Math.max(1, Math.ceil(updatedOwnedCards.length / totalFrames));
   
   for (let i = 0; i <= totalFrames; i++) {
     const currentTimestamp = gameRecord.timestamp + i * frameInterval;
-    const cardsToShow = ownedCards.slice(0, i * cardsPerFrame);
+    const cardsToShow = updatedOwnedCards.slice(0, i * cardsPerFrame);
     
     const currentOwnership: Record<string, PlayerPosition> = {};
     cardsToShow.forEach(cardId => {
       currentOwnership[cardId] = finalCardOwnership[cardId];
     });
     
+    // 计算当前各玩家的牌数
+    const playerCardCounts: Record<PlayerPosition, number> = {
+      bottom: 0, left: 0, top: 0, right: 0
+    };
+    Object.values(currentOwnership).forEach(player => {
+      playerCardCounts[player]++;
+    });
+    
+    const description = i === 0 ? '游戏开始' : 
+                      i === totalFrames ? '游戏结束' :
+                      `第${i}步: 共出牌${cardsToShow.length}张 (我:${playerCardCounts.bottom} 下家:${playerCardCounts.left} 对家:${playerCardCounts.top} 上家:${playerCardCounts.right})`;
+    
     frames.push({
       timestamp: currentTimestamp,
       cardOwnership: currentOwnership,
-      description: i === 0 ? '游戏开始' : 
-                  i === totalFrames ? '游戏结束' :
-                  `第${i}步: 分配了${cardsToShow.length}张牌`
+      description
+    });
+  }
+  
+  // 确保至少有一个帧
+  if (frames.length === 0) {
+    frames.push({
+      timestamp: gameRecord.timestamp,
+      cardOwnership: {},
+      description: '游戏记录为空'
     });
   }
   

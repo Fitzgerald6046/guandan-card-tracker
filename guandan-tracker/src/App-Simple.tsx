@@ -47,6 +47,8 @@ const App: React.FC = () => {
   const [selectedCards, setSelectedCards] = useState<Set<string>>(new Set());
   const [showSettings, setShowSettings] = useState(false);
   const [showReplay, setShowReplay] = useState(false);
+  const [showGameHistory, setShowGameHistory] = useState(false);
+  const [currentReplayGameId, setCurrentReplayGameId] = useState<string | null>(null);
   
   // 回放功能 
   const { 
@@ -54,123 +56,53 @@ const App: React.FC = () => {
     setReplayProgress,
     setReplaySpeed,
     startReplay,
-    stopReplay 
+    stopReplay,
+    saveCurrentGame,
+    loadGameRecord,
+    gameRecords
   } = useGameHistory();
 
   // 回放控制接口
   const replayControl = {
     setProgress: setReplayProgress,
     setSpeed: setReplaySpeed,
-    start: () => startReplay('current'),
+    start: () => {
+      // 先保存当前游戏状态为临时记录用于回放
+      try {
+        const tempGameId = saveCurrentGame(
+          cards.map(card => ({
+            ...card,
+            suit: card.rank === 15 ? null : (card.suit as any),
+            isPlayed: playedCards[card.id] ? true : false,
+            isSelected: false,
+            timestamp: Date.now()
+          })), 
+          playedCards, 
+          currentRank, 
+          [
+            { id: 'p1', position: 'bottom', name: '我', team: 1 },
+            { id: 'p2', position: 'left', name: '对手一', team: 2 },
+            { id: 'p3', position: 'top', name: '队友', team: 1 },
+            { id: 'p4', position: 'right', name: '对手二', team: 2 }
+          ],
+          gameState,
+          {
+            isCompleted: gameState.phase === 'finished',
+            winningTeam: checkGameEnd().winningTeam as 1 | 2 | undefined,
+            notes: `临时回放记录 - ${getGameDuration()}`,
+            tags: ['回放', '临时']
+          }
+        );
+        setCurrentReplayGameId(tempGameId);
+        startReplay(tempGameId);
+      } catch (error) {
+        console.error('启动回放失败:', error);
+        alert('启动回放失败，请稍后重试');
+      }
+    },
     stop: stopReplay
   };
   
-  // 生成当前游戏记录用于回放
-  const generateCurrentGameRecord = () => {
-    const now = Date.now();
-    return {
-      id: `game-${now}`,
-      timestamp: gameState.startTime || now,
-      duration: gameState.startTime ? Math.floor((now - gameState.startTime) / 1000) : 0,
-      currentRank,
-      players: [
-        { id: 'p1', position: 'bottom' as PlayerPosition, name: '我', team: 1 as const },
-        { id: 'p2', position: 'left' as PlayerPosition, name: '对手一', team: 2 as const },
-        { id: 'p3', position: 'top' as PlayerPosition, name: '队友', team: 1 as const },
-        { id: 'p4', position: 'right' as PlayerPosition, name: '对手二', team: 2 as const }
-      ],
-      finalCardOwnership: Object.keys(playedCards).length > 0 ? playedCards : {
-        // 演示数据：模拟一些出牌记录
-        'card-1': 'bottom' as PlayerPosition, 'card-2': 'bottom' as PlayerPosition, 'card-3': 'bottom' as PlayerPosition,
-        'card-4': 'left' as PlayerPosition, 'card-5': 'left' as PlayerPosition, 
-        'card-6': 'top' as PlayerPosition, 'card-7': 'top' as PlayerPosition, 'card-8': 'top' as PlayerPosition,
-        'card-9': 'right' as PlayerPosition, 'card-10': 'right' as PlayerPosition
-      },
-      cardsSnapshot: cards.map(card => ({
-        ...card,
-        suit: card.rank === 15 ? null : (card.suit as any), // 王牌suit为null，其他保持原值
-        isPlayed: playedCards[card.id] ? true : false,
-        isSelected: false,
-        timestamp: Date.now()
-      })),
-      analysisReport: {
-        timestamp: now,
-        currentRank,
-        gameProgress: Math.min(1, Object.keys(playedCards).length / 108),
-        criticalCards: [],
-        patterns: {
-          bombPotential: [],
-          straightPotential: [],
-          flushStraightPotential: []
-        },
-        playProbabilities: {
-          playerProbabilities: {
-            bottom: { initiativeProbability: 0.8, followProbability: 0.7, passProbability: 0.1, expectedStrength: 75 },
-            left: { initiativeProbability: 0.6, followProbability: 0.6, passProbability: 0.3, expectedStrength: 60 },
-            top: { initiativeProbability: 0.7, followProbability: 0.8, passProbability: 0.2, expectedStrength: 70 },
-            right: { initiativeProbability: 0.5, followProbability: 0.5, passProbability: 0.4, expectedStrength: 50 }
-          },
-          nextPlayPrediction: {
-            mostLikelyPlayer: 'bottom' as PlayerPosition,
-            predictedCardType: 'wild' as const,
-            confidence: 0.8
-          }
-        },
-        teamStatus: {
-          1: {
-            strength: Object.values(playedCards).filter(p => p === 'bottom' || p === 'top').length,
-            position: 'advantage' as const,
-            keyAdvantages: ['成功控制牌型节奏', '明牌使用策略得当', '队友配合默契'],
-            weaknesses: [],
-            winProbability: 0.75
-          },
-          2: {
-            strength: Object.values(playedCards).filter(p => p === 'left' || p === 'right').length,
-            position: 'disadvantage' as const,
-            keyAdvantages: [],
-            weaknesses: ['缺乏配合', '关键牌控制不足'],
-            winProbability: 0.25
-          }
-        },
-        keyDecisionPoints: [
-          {
-            description: '开局明牌建立优势',
-            impact: 'high' as const,
-            suggestion: '继续保持优势'
-          },
-          {
-            description: '中局成功阻击对手',
-            impact: 'medium' as const,
-            suggestion: '稳步推进'
-          }
-        ],
-        overallAssessment: {
-          gamePhase: (gameState.phase === 'finished' ? 'endgame' : 'middle') as 'early' | 'middle' | 'late' | 'endgame',
-          dominantTeam: 1 as const,
-          riskLevel: 'low' as const,
-          strategicFocus: ['控制节奏', '保持优势', '团队配合']
-        }
-      },
-      isCompleted: gameState.phase === 'finished',
-      winningTeam: gameState.phase === 'finished' ? (1 as const) : null,
-      gameResult: {
-        team1Score: Object.values(playedCards).filter(p => p === 'bottom' || p === 'top').length,
-        team2Score: Object.values(playedCards).filter(p => p === 'left' || p === 'right').length,
-        advantages: [
-          '成功控制牌型节奏',
-          '明牌使用策略得当',
-          '队友配合默契'
-        ],
-        keyMoments: [
-          '开局明牌建立优势',
-          '中局成功阻击对手',
-          '终局顺利出清手牌'
-        ]
-      },
-      notes: `${getGameDuration()}游戏时长，共出牌${gameState.totalPlays}次`,
-      tags: ['实战', currentRank + '级', gameState.phase === 'finished' ? '胜利' : '进行中']
-    };
-  };
 
   // 游戏状态管理
   const [gameState, setGameState] = useState<GameState>({
@@ -271,6 +203,80 @@ const App: React.FC = () => {
   };
 
   const cards = generateSortedCards();
+
+  // 加载保存的游戏
+  const loadSavedGame = (gameRecord: any) => {
+    try {
+      console.log('加载游戏记录:', gameRecord);
+      
+      // 重置当前游戏状态
+      setGameState({
+        phase: 'finished', // 加载的游戏都视为已完成
+        round: 1,
+        startTime: gameRecord.timestamp,
+        totalPlays: Object.keys(gameRecord.finalCardOwnership).length
+      });
+      
+      // 设置级数
+      setCurrentRank(gameRecord.currentRank);
+      
+      // 重置已出牌记录
+      setPlayedCards(gameRecord.finalCardOwnership || {});
+      
+      // 清空当前选择
+      setSelectedCards(new Set());
+      setSelectedPlayer('bottom');
+      
+      // 重置手牌输入状态
+      setHandInput({
+        isInputMode: false,
+        selectedPlayerForInput: null,
+        playerHands: {
+          bottom: [],
+          left: [],
+          top: [],
+          right: []
+        },
+        revealedCards: {
+          bottom: [],
+          left: [],
+          top: [],
+          right: []
+        },
+        gameStarted: true,
+        currentRevealedPlayer: null
+      });
+      
+      // 设置玩家排名（如果有的话）
+      if (gameRecord.winningTeam) {
+        // 简化处理：假设获胜队伍的玩家排名靠前
+        if (gameRecord.winningTeam === 1) {
+          setPlayerRankings({
+            bottom: 1,
+            top: 2,
+            left: 3,
+            right: 4
+          });
+        } else {
+          setPlayerRankings({
+            left: 1,
+            right: 2,
+            bottom: 3,
+            top: 4
+          });
+        }
+      }
+      
+      // 关闭历史记录弹窗
+      setShowGameHistory(false);
+      
+      alert(`游戏已加载！\n游戏ID: ${gameRecord.id}\n级数: ${gameRecord.currentRank}\n状态: ${gameRecord.isCompleted ? '已完成' : '进行中'}`);
+      
+    } catch (error) {
+      console.error('加载游戏失败:', error);
+      alert('加载游戏失败，请稍后重试');
+    }
+  };
 
   // 选择模式和拖拽状态
   const [isDragging, setIsDragging] = useState(false);
@@ -1220,9 +1226,22 @@ const App: React.FC = () => {
               </div>
             )}
             
+            {/* 历史游戏按钮 */}
+            <button
+              onClick={() => setShowGameHistory(true)}
+              className="px-3 py-2 bg-indigo-500 text-white rounded text-sm hover:bg-indigo-600 transition-colors"
+              title="查看历史游戏记录"
+            >
+              📂 历史
+            </button>
+            
             {/* 回放按钮 */}
             <button
-              onClick={() => setShowReplay(true)}
+              onClick={() => {
+                // 启动回放并显示弹窗
+                replayControl.start();
+                setShowReplay(true);
+              }}
               className="px-3 py-2 bg-purple-500 text-white rounded text-sm hover:bg-purple-600 transition-colors"
               title="牌桌回放（演示模式）"
             >
@@ -1973,11 +1992,83 @@ const App: React.FC = () => {
                   >
                     重置游戏
                   </button>
-                  <button className="w-full bg-green-500 text-white py-2 px-4 rounded hover:bg-green-600 transition-colors">
+                  <button 
+                    onClick={() => {
+                      // 导出游戏数据
+                      const exportData = {
+                        timestamp: Date.now(),
+                        currentRank,
+                        gameState,
+                        playedCards,
+                        handInput,
+                        playHistory,
+                        playerRankings,
+                        version: '1.0'
+                      };
+                      
+                      const dataStr = JSON.stringify(exportData, null, 2);
+                      const dataBlob = new Blob([dataStr], { type: 'application/json' });
+                      const url = URL.createObjectURL(dataBlob);
+                      const link = document.createElement('a');
+                      link.href = url;
+                      link.download = `guandan-game-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.json`;
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                      URL.revokeObjectURL(url);
+                      
+                      alert('游戏数据已导出！');
+                    }}
+                    className="w-full bg-green-500 text-white py-2 px-4 rounded hover:bg-green-600 transition-colors"
+                  >
                     导出游戏数据
                   </button>
-                  <button className="w-full bg-blue-500 text-white py-2 px-4 rounded hover:bg-blue-600 transition-colors">
+                  <button 
+                    onClick={() => {
+                      // 保存当前游戏到历史记录
+                      try {
+                        const gameId = saveCurrentGame(
+                          cards.map(card => ({
+                            ...card,
+                            suit: card.rank === 15 ? null : (card.suit as any),
+                            isPlayed: playedCards[card.id] ? true : false,
+                            isSelected: false,
+                            timestamp: Date.now()
+                          })), 
+                          playedCards, 
+                          currentRank, 
+                          [
+                            { id: 'p1', position: 'bottom', name: '我', team: 1 },
+                            { id: 'p2', position: 'left', name: '对手一', team: 2 },
+                            { id: 'p3', position: 'top', name: '队友', team: 1 },
+                            { id: 'p4', position: 'right', name: '对手二', team: 2 }
+                          ],
+                          gameState,
+                          {
+                            isCompleted: gameState.phase === 'finished',
+                            winningTeam: checkGameEnd().winningTeam as 1 | 2 | undefined,
+                            notes: `手动保存 - ${getGameDuration()}游戏时长，共出牌${gameState.totalPlays}次`,
+                            tags: ['手动保存', currentRank + '级', gameState.phase === 'finished' ? '已完成' : '进行中']
+                          }
+                        );
+                        alert(`游戏已保存！游戏ID: ${gameId}`);
+                      } catch (error) {
+                        console.error('保存游戏失败:', error);
+                        alert('保存游戏失败，请稍后重试');
+                      }
+                    }}
+                    className="w-full bg-blue-500 text-white py-2 px-4 rounded hover:bg-blue-600 transition-colors"
+                  >
                     保存当前游戏
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setShowSettings(false);
+                      setShowGameHistory(true);
+                    }}
+                    className="w-full bg-purple-500 text-white py-2 px-4 rounded hover:bg-purple-600 transition-colors"
+                  >
+                    📂 加载历史游戏
                   </button>
                 </div>
               </div>
@@ -2002,12 +2093,144 @@ const App: React.FC = () => {
               </button>
             </div>
             <div className="overflow-y-auto" style={{ height: 'calc(100vh - 200px)' }}>
-              <GameReplay
-                gameRecord={generateCurrentGameRecord()}
-                replayState={replayState}
-                onReplayControl={replayControl}
-                displayMode="table"
-              />
+              {currentReplayGameId ? (
+                (() => {
+                  const gameRecord = loadGameRecord(currentReplayGameId);
+                  return gameRecord ? (
+                    <GameReplay
+                      gameRecord={gameRecord}
+                      replayState={replayState}
+                      onReplayControl={replayControl}
+                      displayMode="table"
+                    />
+                  ) : (
+                    <div className="flex items-center justify-center h-full">
+                      <p className="text-gray-500">无法加载回放数据</p>
+                    </div>
+                  );
+                })()
+              ) : (
+                <div className="flex items-center justify-center h-full">
+                  <p className="text-gray-500">请先启动回放</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 游戏历史弹窗 */}
+      {showGameHistory && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg max-w-4xl w-full max-h-full overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b border-gray-200">
+              <h2 className="text-xl font-bold text-gray-800">📂 历史游戏记录</h2>
+              <button
+                onClick={() => setShowGameHistory(false)}
+                className="text-gray-400 hover:text-gray-600 p-1"
+              >
+                <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+              </button>
+            </div>
+            <div className="overflow-y-auto p-4" style={{ height: 'calc(100vh - 200px)' }}>
+              {gameRecords.length === 0 ? (
+                <div className="text-center py-8">
+                  <div className="text-gray-500 text-lg mb-2">暂无历史游戏记录</div>
+                  <div className="text-gray-400 text-sm">保存游戏后将在这里显示</div>
+                </div>
+              ) : (
+                <div className="grid gap-4">
+                  {gameRecords.map((record, index) => (
+                    <div key={record.id} className="bg-gray-50 rounded-lg p-4 border hover:shadow-md transition-shadow">
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-2 mb-2">
+                            <span className="font-semibold text-gray-800">
+                              #{index + 1} - {record.currentRank === 11 ? 'J' : record.currentRank === 12 ? 'Q' : record.currentRank === 13 ? 'K' : record.currentRank === 14 ? 'A' : record.currentRank}级
+                            </span>
+                            <span className={`px-2 py-1 text-xs rounded ${
+                              record.isCompleted ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
+                            }`}>
+                              {record.isCompleted ? '已完成' : '进行中'}
+                            </span>
+                            {record.winningTeam && (
+                              <span className={`px-2 py-1 text-xs rounded ${
+                                record.winningTeam === 1 ? 'bg-blue-100 text-blue-800' : 'bg-red-100 text-red-800'
+                              }`}>
+                                队伍{record.winningTeam}获胜
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-sm text-gray-600 grid grid-cols-2 gap-2">
+                            <div>🕐 {new Date(record.timestamp).toLocaleString('zh-CN')}</div>
+                            <div>⏱️ {Math.floor(record.duration / 60)}分{record.duration % 60}秒</div>
+                            <div>🃏 出牌{Object.keys(record.finalCardOwnership).length}张</div>
+                            <div>📊 比分 {record.gameResult.team1Score}:{record.gameResult.team2Score}</div>
+                          </div>
+                          {record.tags && record.tags.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-2">
+                              {record.tags.map((tag, tagIndex) => (
+                                <span key={tagIndex} className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded">
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {record.notes && (
+                            <div className="text-sm text-gray-500 mt-2 italic">
+                              💭 {record.notes}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex flex-col space-y-2 ml-4">
+                          <button
+                            onClick={() => loadSavedGame(record)}
+                            className="px-3 py-1 bg-green-500 text-white rounded text-sm hover:bg-green-600 transition-colors"
+                          >
+                            📂 加载游戏
+                          </button>
+                          <button
+                            onClick={() => {
+                              setCurrentReplayGameId(record.id);
+                              startReplay(record.id);
+                              setShowGameHistory(false);
+                              setShowReplay(true);
+                            }}
+                            className="px-3 py-1 bg-purple-500 text-white rounded text-sm hover:bg-purple-600 transition-colors"
+                          >
+                            🎬 回放
+                          </button>
+                          <button
+                            onClick={() => {
+                              const exportData = {
+                                ...record,
+                                exportTimestamp: Date.now(),
+                                version: '1.0'
+                              };
+                              
+                              const dataStr = JSON.stringify(exportData, null, 2);
+                              const dataBlob = new Blob([dataStr], { type: 'application/json' });
+                              const url = URL.createObjectURL(dataBlob);
+                              const link = document.createElement('a');
+                              link.href = url;
+                              link.download = `游戏记录-${record.currentRank}级-${new Date(record.timestamp).toISOString().slice(0, 19).replace(/:/g, '-')}.json`;
+                              document.body.appendChild(link);
+                              link.click();
+                              document.body.removeChild(link);
+                              URL.revokeObjectURL(url);
+                            }}
+                            className="px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600 transition-colors"
+                          >
+                            💾 导出
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>

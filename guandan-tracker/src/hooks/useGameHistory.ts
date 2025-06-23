@@ -144,7 +144,7 @@ interface UseGameHistoryReturn {
       notes?: string;
       tags?: string[];
     }
-  ) => void;
+  ) => string;
   
   /** 加载游戏记录 */
   loadGameRecord: (gameId: string) => GameRecord | null;

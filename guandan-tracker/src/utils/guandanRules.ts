@@ -82,11 +82,14 @@ function analyzeCards(cards: Card[], currentRank: CardRank): {
     if (card.rank === 15) {
       hasKings = true;
       ranks.set(15, (ranks.get(15) || 0) + 1);
-    } else if (canUseWildCard(card) && card.rank !== currentRank) {
-      // 红心配牌但不是级牌的才算wildCard
+    } else if (canUseWildCard(card)) {
+      // 所有红心配牌（包括级牌）都可以作为wildCard使用
+      // 但当它们参与炸弹或其他牌型时，也可以按照实际牌点使用
       wildCards++;
+      // 同时也记录它们的实际牌点，以便在炸弹等牌型中使用
+      ranks.set(card.rank, (ranks.get(card.rank) || 0) + 1);
     } else {
-      // 级牌和普通牌都按正常牌处理
+      // 普通牌按正常牌处理
       ranks.set(card.rank, (ranks.get(card.rank) || 0) + 1);
     }
   });
@@ -570,10 +573,18 @@ function isBomb(cards: Card[], currentRank: CardRank): CardType {
   const { ranks, wildCards } = analyzeCards(cards, currentRank);
   
   // 寻找可以组成炸弹的牌点
-  for (const [rank, count] of ranks.entries()) {
+  for (const [rank] of ranks.entries()) {
     if (rank === 15) continue; // 王牌单独处理
     
-    if (count + wildCards >= 4 && count + wildCards === cards.length) {
+    // 检查能否用该牌点加上配牌组成炸弹
+    // 这里需要特别处理：红心配既可以作为配牌使用，也可以作为本身牌点使用
+    const pureCount = cards.filter(card => card.rank === rank && !canUseWildCard(card)).length;
+    const wildOfThisRank = cards.filter(card => card.rank === rank && canUseWildCard(card)).length;
+    const otherWildCards = wildCards - wildOfThisRank;
+    
+    // 情况1：红心配作为本身牌点使用
+    const totalSameRank = pureCount + wildOfThisRank;
+    if (totalSameRank >= 4 && totalSameRank === cards.length) {
       let power = 90; // 基础炸弹威力
       
       // 根据张数调整威力
@@ -584,7 +595,27 @@ function isBomb(cards: Card[], currentRank: CardRank): CardType {
       
       return {
         type: 'bomb',
-        description: `${cards.length}张炸弹`,
+        description: `${cards.length}张炸弹 (${rank === 11 ? 'J' : rank === 12 ? 'Q' : rank === 13 ? 'K' : rank === 14 ? 'A' : rank})`,
+        isValid: true,
+        cardCount: cards.length,
+        power,
+        mainRank: rank
+      };
+    }
+    
+    // 情况2：红心配作为配牌使用
+    if (pureCount + otherWildCards >= 4 && pureCount + otherWildCards === cards.length) {
+      let power = 90; // 基础炸弹威力
+      
+      // 根据张数调整威力
+      if (cards.length >= 8) power = 110; // 八头炸及以上
+      else if (cards.length === 7) power = 105;
+      else if (cards.length === 6) power = 100;
+      else if (cards.length === 5) power = 95;
+      
+      return {
+        type: 'bomb',
+        description: `${cards.length}张炸弹 (${rank === 11 ? 'J' : rank === 12 ? 'Q' : rank === 13 ? 'K' : rank === 14 ? 'A' : rank})`,
         isValid: true,
         cardCount: cards.length,
         power,
