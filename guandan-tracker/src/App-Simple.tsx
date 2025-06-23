@@ -1003,16 +1003,16 @@ const App: React.FC = () => {
   });
 
   // 检查游戏是否结束以及获胜玩家
-  const checkGameEnd = (): { isGameEnd: boolean; winners: PlayerPosition[] } => {
+  const checkGameEnd = (): { isGameEnd: boolean; winners: PlayerPosition[]; winningTeam?: number } => {
     if (!handInput.gameStarted) return { isGameEnd: false, winners: [] };
     
     const winners: PlayerPosition[] = [];
-    let playersFinished = 0;
+    const finishedPlayers: { player: PlayerPosition; finishTime: number }[] = [];
     
     // 掼蛋规则：每个玩家有27张牌
     const TOTAL_CARDS_PER_PLAYER = 27;
     
-    // 检查每个玩家是否出完所有27张牌
+    // 检查每个玩家是否出完所有27张牌，并记录完成时间
     (['bottom', 'left', 'top', 'right'] as PlayerPosition[]).forEach(player => {
       const playerPlayedCards = Object.entries(playedCards)
         .filter(([, cardPlayer]) => cardPlayer === player)
@@ -1021,7 +1021,6 @@ const App: React.FC = () => {
       // 玩家需要出完所有27张牌才算胜利
       if (playerPlayedCards.length >= TOTAL_CARDS_PER_PLAYER) {
         winners.push(player);
-        playersFinished++;
         
         // 如果这个玩家还没有排名，分配排名
         if (playerRankings[player] === null) {
@@ -1032,13 +1031,42 @@ const App: React.FC = () => {
               ...prev,
               [player]: nextRank
             }));
+            
+            // 记录完成时间（用排名序号作为完成时间）
+            finishedPlayers.push({ player, finishTime: nextRank });
           }
+        } else {
+          // 已有排名，直接添加到完成列表
+          finishedPlayers.push({ player, finishTime: playerRankings[player]! });
         }
       }
     });
     
-    // 游戏结束条件：至少有3个玩家出完所有27张牌
-    const isGameEnd = playersFinished >= 3;
+    // 按完成时间排序
+    finishedPlayers.sort((a, b) => a.finishTime - b.finishTime);
+    
+    // 检查团队胜利条件：同一队伍的两个玩家成为头游、二游
+    if (finishedPlayers.length >= 2) {
+      const firstPlace = finishedPlayers[0].player;  // 头游
+      const secondPlace = finishedPlayers[1].player; // 二游
+      
+      // 团队1：我(bottom) + 队友(top)
+      // 团队2：对手一(left) + 对手二(right)
+      const team1Players = ['bottom', 'top'];
+      const team2Players = ['left', 'right'];
+      
+      const team1Won = team1Players.includes(firstPlace) && team1Players.includes(secondPlace);
+      const team2Won = team2Players.includes(firstPlace) && team2Players.includes(secondPlace);
+      
+      if (team1Won) {
+        return { isGameEnd: true, winners, winningTeam: 1 };
+      } else if (team2Won) {
+        return { isGameEnd: true, winners, winningTeam: 2 };
+      }
+    }
+    
+    // 如果没有团队胜利，检查传统结束条件：至少有3个玩家出完所有27张牌
+    const isGameEnd = finishedPlayers.length >= 3;
     
     return { isGameEnd, winners };
   };
@@ -1046,7 +1074,7 @@ const App: React.FC = () => {
   // 游戏结束处理
   React.useEffect(() => {
     if (gameState.phase === 'playing') {
-      const { isGameEnd, winners } = checkGameEnd();
+      const { isGameEnd, winners, winningTeam } = checkGameEnd();
       if (isGameEnd) {
         setGameState(prev => ({
           ...prev,
@@ -1060,8 +1088,26 @@ const App: React.FC = () => {
           right: '对手二'
         };
         
-        const winnerNames = winners.map(player => playerNames[player]).join('、');
-        alert(`🎉 游戏结束！\n获胜玩家: ${winnerNames}\n游戏时长: ${getGameDuration()}\n总出牌次数: ${gameState.totalPlays}`);
+        let gameEndMessage = '🎉 游戏结束！\n';
+        
+        if (winningTeam) {
+          // 团队胜利
+          if (winningTeam === 1) {
+            gameEndMessage += '🏆 团队胜利！我和队友包揽头游、二游！\n';
+            gameEndMessage += '获胜队伍：我 + 队友\n';
+          } else {
+            gameEndMessage += '😔 对方团队胜利！对手包揽头游、二游！\n';
+            gameEndMessage += '获胜队伍：对手一 + 对手二\n';
+          }
+        } else {
+          // 传统胜利（三家出完）
+          const winnerNames = winners.map(player => playerNames[player]).join('、');
+          gameEndMessage += `出完玩家: ${winnerNames}\n`;
+        }
+        
+        gameEndMessage += `游戏时长: ${getGameDuration()}\n总出牌次数: ${gameState.totalPlays}`;
+        
+        alert(gameEndMessage);
       }
     }
   }, [playedCards, gameState.phase, gameState.totalPlays, getGameDuration]);
@@ -1084,7 +1130,15 @@ const App: React.FC = () => {
                     ? 'bg-yellow-100 text-yellow-700' 
                     : 'bg-green-100 text-green-700'
                 }`}>
-                  {gameState.phase === 'finished' ? '🏆 游戏结束' : '🎮 第' + gameState.round + '局'}
+                  {gameState.phase === 'finished' ? 
+                    (() => {
+                      const { winningTeam } = checkGameEnd();
+                      if (winningTeam === 1) return '🏆 我队胜利';
+                      if (winningTeam === 2) return '😔 对手胜利';
+                      return '🏆 游戏结束';
+                    })() : 
+                    '🎮 第' + gameState.round + '局'
+                  }
                 </div>
                 <div className="bg-blue-100 text-blue-700 px-2 py-1 rounded">
                   ⏱️ {getGameDuration()}
