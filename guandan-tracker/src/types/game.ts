@@ -265,6 +265,27 @@ export interface PlayRecord {
   
   /** 出牌前手牌数 */
   cardsBeforePlay?: number;
+  
+  /** AI推理分析数据 (新增) */
+  aiAnalysis?: {
+    /** 该轮过牌的玩家列表 */
+    passedPlayers?: PlayerPosition[];
+    /** 推断的手牌约束信息 */
+    impliedConstraints?: CardConstraint[];
+    /** AI推理置信度 (0-1) */
+    confidenceLevel?: number;
+    /** 推测的关键牌信息 */
+    suspectedCards?: SuspectedCard[];
+    /** 行为模式分析 */
+    behaviorAnalysis?: {
+      /** 是否为异常出牌(如拆牌) */
+      isUnusualPlay: boolean;
+      /** 出牌动机推测 */
+      playMotivation: 'aggressive' | 'defensive' | 'forced' | 'strategic';
+      /** 预期后续行动 */
+      expectedFollowUp: string[];
+    };
+  };
 }
 
 /** 回合信息 */
@@ -468,6 +489,95 @@ export function isRankCard(card: Card, currentRank: GameRank): boolean {
 /** 检查卡牌是否为配牌（红心级牌） */
 export function isWildCard(card: Card, currentRank: GameRank): boolean {
   return isRankCard(card, currentRank) && isHearts(card);
+}
+
+// ==================== AI推理相关类型 ====================
+
+/** 手牌约束信息 */
+export interface CardConstraint {
+  /** 约束对象玩家 */
+  playerPosition: PlayerPosition;
+  /** 确定不可能拥有的牌 */
+  cannotHave: GameRank[];
+  /** 很可能拥有的牌 */
+  mustHave: GameRank[];
+  /** 约束的置信度 (0-1) */
+  probability: number;
+  /** 约束来源（出牌/过牌行为） */
+  source: 'play_action' | 'pass_action' | 'break_pattern' | 'deduction';
+  /** 约束产生时间 */
+  timestamp: number;
+}
+
+/** 推测的关键牌信息 */
+export interface SuspectedCard {
+  /** 推测的牌面 */
+  rank: GameRank;
+  /** 推测的花色 */
+  suit?: Suit;
+  /** 推测的持有者 */
+  suspectedOwner: PlayerPosition;
+  /** 推测置信度 (0-1) */
+  confidence: number;
+  /** 推测依据 */
+  reasoning: string;
+}
+
+/** AI分析结果 */
+export interface AIAnalysisResult {
+  /** 分析时间戳 */
+  timestamp: number;
+  /** 游戏阶段 */
+  gamePhase: 'early' | 'middle' | 'late' | 'endgame';
+  /** 各玩家剩余牌数推测 */
+  estimatedCardCounts: Record<PlayerPosition, {
+    count: number;
+    confidence: number;
+  }>;
+  /** 关键牌分布推测 */
+  keyCardDistribution: {
+    wildCards: Record<PlayerPosition, number>;
+    rankCards: Record<PlayerPosition, number>;
+    jokers: Record<PlayerPosition, number>;
+  };
+  /** 威胁等级评估 */
+  threatLevels: Record<PlayerPosition, {
+    level: 'low' | 'medium' | 'high' | 'critical';
+    reasoning: string[];
+  }>;
+  /** 推荐策略 */
+  suggestions: {
+    action: 'play' | 'pass' | 'wait';
+    reasoning: string;
+    confidence: number;
+    alternativeOptions?: string[];
+  };
+}
+
+/** 过牌行为分析 */
+export interface PassAnalysis {
+  /** 过牌玩家 */
+  playerPosition: PlayerPosition;
+  /** 当时场上的牌型 */
+  leadingCardType: PlayType;
+  /** 推断该玩家无法打过的牌型 */
+  cannotBeat: PlayType[];
+  /** 推断该玩家缺少的关键牌 */
+  likelyMissingCards: GameRank[];
+  /** 分析置信度 */
+  confidence: number;
+}
+
+/** 拆牌行为分析 */
+export interface BreakingPatternAnalysis {
+  /** 出牌玩家 */
+  playerPosition: PlayerPosition;
+  /** 被拆掉的可能牌型 */
+  brokenPattern: PlayType;
+  /** 拆牌原因推测 */
+  reasoning: 'forced' | 'strategic' | 'defensive' | 'unknown';
+  /** 暴露的手牌信息 */
+  revealedInfo: string[];
 }
 
 export default {
