@@ -79,7 +79,13 @@ const App: React.FC = () => {
         { id: 'p3', position: 'top' as PlayerPosition, name: '队友', team: 1 as const },
         { id: 'p4', position: 'right' as PlayerPosition, name: '对手二', team: 2 as const }
       ],
-      finalCardOwnership: playedCards,
+      finalCardOwnership: Object.keys(playedCards).length > 0 ? playedCards : {
+        // 演示数据：模拟一些出牌记录
+        'card-1': 'bottom', 'card-2': 'bottom', 'card-3': 'bottom',
+        'card-4': 'left', 'card-5': 'left', 
+        'card-6': 'top', 'card-7': 'top', 'card-8': 'top',
+        'card-9': 'right', 'card-10': 'right'
+      },
       cardsSnapshot: cards.map(card => ({
         ...card,
         suit: card.rank === 15 ? null : (card.suit as any), // 王牌suit为null，其他保持原值
@@ -1164,13 +1170,10 @@ const App: React.FC = () => {
             {/* 回放按钮 */}
             <button
               onClick={() => setShowReplay(true)}
-              className="p-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded transition-colors"
-              title="牌桌回放"
-              disabled={Object.keys(playedCards).length === 0}
+              className="px-3 py-2 bg-purple-500 text-white rounded text-sm hover:bg-purple-600 transition-colors"
+              title="牌桌回放（演示模式）"
             >
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                <path d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm8 7l-4-2v4l4-2z" />
-              </svg>
+              🎬 回放
             </button>
             
             <button
