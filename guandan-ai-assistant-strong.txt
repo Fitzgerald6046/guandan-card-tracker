@@ -1,0 +1,173 @@
+好的，这是对上一份增强版方案中，我所进行的所有修改和增补部分的单独列表，方便您清晰地看到变化之处。
+
+-----
+
+### 1\. 数据结构设计 (`PlayerAnalysis` 接口)
+
+**核心改动：** 在 `PlayerAnalysis` 接口中，新增了 `inferredConstraints` 字段，用于更具体地记录对玩家的逻辑推断，使AI的“记忆”和决策依据更明确。
+
+```typescript
+// types/ai.ts in PlayerAnalysis interface
+
+  // 【新增部分】
+  // 增加推断约束，使AI的“记忆”更具体
+  inferredConstraints: {
+    // 记录该玩家明确表示打不过（Pass）的牌型
+    cannotBeat: CardType[]; 
+    // 根据拆牌行为等，推断该玩家可能缺少的牌型或牌张
+    likelyMissing: ('single' | 'pair' | 'specific_card_rank')[];
+  };
+```
+
+-----
+
+### 2\. 概率计算与逻辑推理引擎 (`ProbabilityEngine`)
+
+**核心改动：** 将原先简单的 `adjustByPlayPattern` 函数，深化为一个更复杂的 `adjustProbabilitiesByGameActions` 函数，并引入了三条核心的逻辑推理规则来替代简单的概率乘数。
+
+```typescript
+// utils/probabilityEngine.ts
+
+// 【修改点】将笼统的函数名和逻辑细化
+// 原函数为 adjustByPlayPattern，现修改为 adjustProbabilitiesByGameActions
+private adjustProbabilitiesByGameActions(
+  cardId: string,
+  probabilities: { [playerId: number]: number },
+  analysisState: GameAnalysisState
+): void {
+  analysisState.roundRecords.forEach(round => {
+    // 【新增逻辑】遍历每个玩家在每一轮的行为
+    for (const [playerId, didPass] of Object.entries(round.isPass)) {
+      const player = parseInt(playerId);
+      const leadingPlay = round.plays[0]?.cardType; // 本轮领出的牌
+
+      // 【新增逻辑】规则A: “过牌（Pass）是金矿” - 强烈的否定性证据
+      if (didPass && leadingPlay) {
+        // 如果该玩家Pass了，则他持有任何能打过 leadingPlay 的牌型的概率都应急剧下降
+        if (this.canCardContributeToBeat(cardId, leadingPlay)) {
+            probabilities[player] *= 0.1; // 概率急剧下降
+        }
+      }
+    }
+
+    // 【新增逻辑】规则B: “拆牌行为”暴露牌型结构
+    round.plays.forEach(play => {
+      if (this.isUnusualPlay(play)) {
+         // 例如，拆了一对A打单张，则该玩家持有其他安全单张的概率降低
+      }
+    });
+      
+    // 【新增逻辑】规则C: “领出牌”暗示手牌构成
+    const leadingPlay = round.plays[0];
+    if (leadingPlay) {
+      if (this.isLeadCardHint(cardId, leadingPlay.cardType)) {
+          probabilities[leadingPlay.playerId] *= 0.7; // 概率降低
+      }
+    }
+  });
+
+  // 最后，归一化所有概率
+  this.normalizeProbabilities(probabilities);
+}
+```
+
+-----
+
+### 3\. 战术建议系统 (`TacticalAdvisor`)
+
+**核心改动：** 全面深化了 `evaluateOption` 函数中的各项评分逻辑，特别是团队配合和风险评估，使其决策更符合实战中的复杂考量。
+
+#### 3.1 评估选项 (`evaluateOption`)
+
+**改动：** 增加了明确的权重分配。
+
+```typescript
+// utils/tacticalAdvisor.ts in evaluateOption
+
+    // 【修改点】为每个评分维度定义更具体的权重
+    const weights = { control: 0.3, strength: 0.3, teamwork: 0.25, risk: 0.15 };
+```
+
+#### 3.2 团队配合评分 (`evaluateTeamwork`)
+
+**改动：** 完全重写了此函数，引入了清晰的配合规则。
+
+```typescript
+// utils/tacticalAdvisor.ts
+
+  // 【重写部分】细化团队配合评分逻辑
+  private evaluateTeamwork(
+    option: PlayOption,
+    currentPlayer: number,
+    playerAnalyses: Map<number, PlayerAnalysis>,
+    analysisState: GameAnalysisState
+  ): number {
+      const teammateId = (currentPlayer + 2) % 4;
+      const lastPlay = analysisState.roundRecords[analysisState.roundRecords.length - 1]?.plays.slice(-1)[0];
+
+      // 如果是自己或对家领出牌，默认配合良好
+      if (!lastPlay || lastPlay.playerId === currentPlayer || lastPlay.playerId === teammateId) {
+          return 1.0; // 满分
+      }
+
+      // 如果对家刚打完是最大，你不应该压制他
+      if (lastPlay.playerId === teammateId && this.isOptionStronger(option, lastPlay.cardType)) {
+          return -1.0; // 惩罚项，强烈不建议
+      }
+
+      // 如果对手打牌，对家Pass，你在解围
+      const teammatePassed = analysisState.roundRecords.slice(-1)[0]?.isPass[teammateId];
+      if (teammatePassed && this.isOptionStronger(option, lastPlay.cardType)) {
+          return 1.0; // 奖励项，鼓励解围
+      }
+
+      return 0.5; // 中性
+  }
+```
+
+#### 3.3 风险评估 (`evaluateRisk`)
+
+**改动：** 完全重写了此函数，量化了具体的风险来源。
+
+```typescript
+// utils/tacticalAdvisor.ts
+
+  // 【重写部分】细化风险评估逻辑
+  private evaluateRisk(
+    option: PlayOption,
+    currentPlayer: number,
+    playerAnalyses: Map<number, PlayerAnalysis>
+  ): number {
+    let risk = 0;
+    // 风险1: 拆散了更强的牌型
+    if (option.breaksUpStrongerCombination) {
+      risk += 0.5;
+    }
+    // 风险2: 打出后失去控制权，且手中无其他大牌
+    if (option.isLosingControl && !this.hasBackup(currentPlayer, playerAnalyses)) {
+      risk += 0.4;
+    }
+    // 风险3: 对手可能有炸弹的概率
+    const opponentBombProb = this.getOpponentBombProbability(playerAnalyses);
+    risk += opponentBombProb * 0.3; // 风险与对手持炸弹概率正相关
+
+    return 1.0 - risk; // 返回值为分数，1 - risk
+  }
+```
+
+#### 3.4 生成建议理由 (`generateReason`)
+
+**改动：** 使理由能更具体地反映出AI的决策过程。
+
+```typescript
+// utils/tacticalAdvisor.ts in generateReason
+
+    // 【修改点】理由应更具体，反映评分逻辑
+    const reasons: string[] = [];
+
+    if (score.controlScore > 0.8) reasons.push("可以稳固地掌握出牌权");
+    if (score.teamworkScore > 0.8) reasons.push("对家会很舒服");
+    if (score.teamworkScore < 0) reasons.push("会打乱对家节奏");
+    if (score.riskScore < 0.3) reasons.push("但风险很高，可能被反制");
+    // ...
+```

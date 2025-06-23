@@ -6,6 +6,8 @@
 import React, { useState } from 'react';
 import CardImage from './components/CardImage';
 import { validateCardType } from './utils/guandanRules';
+import { GameReplay } from './components/GameReplay';
+import { useGameHistory } from './hooks/useGameHistory';
 
 // 简化的类型定义
 type GameRank = 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
@@ -44,6 +46,125 @@ const App: React.FC = () => {
   const [selectedPlayer, setSelectedPlayer] = useState<PlayerPosition>('bottom');
   const [selectedCards, setSelectedCards] = useState<Set<string>>(new Set());
   const [showSettings, setShowSettings] = useState(false);
+  const [showReplay, setShowReplay] = useState(false);
+  
+  // 回放功能 
+  const { 
+    replayState, 
+    setReplayProgress,
+    setReplaySpeed,
+    startReplay,
+    stopReplay 
+  } = useGameHistory();
+
+  // 回放控制接口
+  const replayControl = {
+    setProgress: setReplayProgress,
+    setSpeed: setReplaySpeed,
+    start: () => startReplay('current'),
+    stop: stopReplay
+  };
+  
+  // 生成当前游戏记录用于回放
+  const generateCurrentGameRecord = () => {
+    const now = Date.now();
+    return {
+      id: `game-${now}`,
+      timestamp: gameState.startTime || now,
+      duration: gameState.startTime ? Math.floor((now - gameState.startTime) / 1000) : 0,
+      currentRank,
+      players: [
+        { id: 'p1', position: 'bottom' as PlayerPosition, name: '我', team: 1 as const },
+        { id: 'p2', position: 'left' as PlayerPosition, name: '对手一', team: 2 as const },
+        { id: 'p3', position: 'top' as PlayerPosition, name: '队友', team: 1 as const },
+        { id: 'p4', position: 'right' as PlayerPosition, name: '对手二', team: 2 as const }
+      ],
+      finalCardOwnership: playedCards,
+      cardsSnapshot: cards.map(card => ({
+        ...card,
+        suit: card.rank === 15 ? null : (card.suit as any), // 王牌suit为null，其他保持原值
+        isPlayed: playedCards[card.id] ? true : false,
+        isSelected: false,
+        timestamp: Date.now()
+      })),
+      analysisReport: {
+        timestamp: now,
+        currentRank,
+        gameProgress: Math.min(1, Object.keys(playedCards).length / 108),
+        criticalCards: [],
+        patterns: {
+          bombPotential: [],
+          straightPotential: [],
+          flushStraightPotential: []
+        },
+        playProbabilities: {
+          playerProbabilities: {
+            bottom: { initiativeProbability: 0.8, followProbability: 0.7, passProbability: 0.1, expectedStrength: 75 },
+            left: { initiativeProbability: 0.6, followProbability: 0.6, passProbability: 0.3, expectedStrength: 60 },
+            top: { initiativeProbability: 0.7, followProbability: 0.8, passProbability: 0.2, expectedStrength: 70 },
+            right: { initiativeProbability: 0.5, followProbability: 0.5, passProbability: 0.4, expectedStrength: 50 }
+          },
+          nextPlayPrediction: {
+            mostLikelyPlayer: 'bottom' as PlayerPosition,
+            predictedCardType: 'wild' as const,
+            confidence: 0.8
+          }
+        },
+        teamStatus: {
+          1: {
+            strength: Object.values(playedCards).filter(p => p === 'bottom' || p === 'top').length,
+            position: 'advantage' as const,
+            keyAdvantages: ['成功控制牌型节奏', '明牌使用策略得当', '队友配合默契'],
+            weaknesses: [],
+            winProbability: 0.75
+          },
+          2: {
+            strength: Object.values(playedCards).filter(p => p === 'left' || p === 'right').length,
+            position: 'disadvantage' as const,
+            keyAdvantages: [],
+            weaknesses: ['缺乏配合', '关键牌控制不足'],
+            winProbability: 0.25
+          }
+        },
+        keyDecisionPoints: [
+          {
+            description: '开局明牌建立优势',
+            impact: 'high' as const,
+            suggestion: '继续保持优势'
+          },
+          {
+            description: '中局成功阻击对手',
+            impact: 'medium' as const,
+            suggestion: '稳步推进'
+          }
+        ],
+        overallAssessment: {
+          gamePhase: (gameState.phase === 'finished' ? 'endgame' : 'middle') as 'early' | 'middle' | 'late' | 'endgame',
+          dominantTeam: 1 as const,
+          riskLevel: 'low' as const,
+          strategicFocus: ['控制节奏', '保持优势', '团队配合']
+        }
+      },
+      isCompleted: gameState.phase === 'finished',
+      winningTeam: gameState.phase === 'finished' ? (1 as const) : null,
+      gameResult: {
+        team1Score: Object.values(playedCards).filter(p => p === 'bottom' || p === 'top').length,
+        team2Score: Object.values(playedCards).filter(p => p === 'left' || p === 'right').length,
+        advantages: [
+          '成功控制牌型节奏',
+          '明牌使用策略得当',
+          '队友配合默契'
+        ],
+        keyMoments: [
+          '开局明牌建立优势',
+          '中局成功阻击对手',
+          '终局顺利出清手牌'
+        ]
+      },
+      notes: `${getGameDuration()}游戏时长，共出牌${gameState.totalPlays}次`,
+      tags: ['实战', currentRank + '级', gameState.phase === 'finished' ? '胜利' : '进行中']
+    };
+  };
 
   // 游戏状态管理
   const [gameState, setGameState] = useState<GameState>({
@@ -1039,6 +1160,19 @@ const App: React.FC = () => {
                 </button>
               </div>
             )}
+            
+            {/* 回放按钮 */}
+            <button
+              onClick={() => setShowReplay(true)}
+              className="p-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded transition-colors"
+              title="牌桌回放"
+              disabled={Object.keys(playedCards).length === 0}
+            >
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm8 7l-4-2v4l4-2z" />
+              </svg>
+            </button>
+            
             <button
               onClick={() => setShowSettings(true)}
               className="p-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded transition-colors"
@@ -1791,6 +1925,33 @@ const App: React.FC = () => {
                   </button>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 回放弹窗 */}
+      {showReplay && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg max-w-7xl w-full max-h-full overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b border-gray-200">
+              <h2 className="text-xl font-bold text-gray-800">🎬 牌桌回放</h2>
+              <button
+                onClick={() => setShowReplay(false)}
+                className="text-gray-400 hover:text-gray-600 p-1"
+              >
+                <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+              </button>
+            </div>
+            <div className="overflow-y-auto" style={{ height: 'calc(100vh - 200px)' }}>
+              <GameReplay
+                gameRecord={generateCurrentGameRecord()}
+                replayState={replayState}
+                onReplayControl={replayControl}
+                displayMode="table"
+              />
             </div>
           </div>
         </div>
