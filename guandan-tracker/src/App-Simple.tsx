@@ -81,10 +81,10 @@ const App: React.FC = () => {
       ],
       finalCardOwnership: Object.keys(playedCards).length > 0 ? playedCards : {
         // 演示数据：模拟一些出牌记录
-        'card-1': 'bottom', 'card-2': 'bottom', 'card-3': 'bottom',
-        'card-4': 'left', 'card-5': 'left', 
-        'card-6': 'top', 'card-7': 'top', 'card-8': 'top',
-        'card-9': 'right', 'card-10': 'right'
+        'card-1': 'bottom' as PlayerPosition, 'card-2': 'bottom' as PlayerPosition, 'card-3': 'bottom' as PlayerPosition,
+        'card-4': 'left' as PlayerPosition, 'card-5': 'left' as PlayerPosition, 
+        'card-6': 'top' as PlayerPosition, 'card-7': 'top' as PlayerPosition, 'card-8': 'top' as PlayerPosition,
+        'card-9': 'right' as PlayerPosition, 'card-10': 'right' as PlayerPosition
       },
       cardsSnapshot: cards.map(card => ({
         ...card,
@@ -813,7 +813,7 @@ const App: React.FC = () => {
     const playerOrder: PlayerPosition[] = ['bottom', 'left', 'top', 'right'];
     const currentIndex = playerOrder.indexOf(currentPlayer);
     
-    // 如果游戏开始了，需要检查玩家是否已出完牌
+    // 如果游戏开始了，需要检查玩家是否已出完牌（只考虑胜利状态，不考虑手牌设置）
     if (handInput.gameStarted) {
       const { winners } = checkGameEnd();
       
@@ -822,16 +822,15 @@ const App: React.FC = () => {
         const nextIndex = (currentIndex + i) % playerOrder.length;
         const nextPlayer = playerOrder[nextIndex];
         
-        // 如果这个玩家没有手牌（在手牌输入时没设置）或者已经出完牌，跳过
-        const hasHandCards = handInput.playerHands[nextPlayer].length > 0;
+        // 只检查玩家是否已经获胜（出完所有牌），不检查手牌设置
         const isFinished = winners.includes(nextPlayer);
         
-        if (hasHandCards && !isFinished) {
+        if (!isFinished) {
           return nextPlayer;
         }
       }
       
-      // 如果所有玩家都出完了或者没有手牌，返回当前玩家
+      // 如果所有玩家都出完了，返回当前玩家
       return currentPlayer;
     }
     

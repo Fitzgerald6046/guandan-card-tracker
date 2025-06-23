@@ -54,10 +54,8 @@ function getCardWeight(rank: CardRank, currentRank: CardRank): number {
  */
 function getSequenceValue(rank: CardRank, currentRank: CardRank): number {
   if (rank === 15) return -1; // 王牌不参与顺子
-  if (rank === currentRank) {
-    // 级牌归位为普通牌
-    return rank;
-  }
+  // 级牌归位为普通牌，可以参与顺子
+  // 例如：如果当前级数是7，那么7可以在56789顺子中当作7使用
   return rank;
 }
 
@@ -84,9 +82,11 @@ function analyzeCards(cards: Card[], currentRank: CardRank): {
     if (card.rank === 15) {
       hasKings = true;
       ranks.set(15, (ranks.get(15) || 0) + 1);
-    } else if (canUseWildCard(card)) {
+    } else if (canUseWildCard(card) && card.rank !== currentRank) {
+      // 红心配牌但不是级牌的才算wildCard
       wildCards++;
     } else {
+      // 级牌和普通牌都按正常牌处理
       ranks.set(card.rank, (ranks.get(card.rank) || 0) + 1);
     }
   });
