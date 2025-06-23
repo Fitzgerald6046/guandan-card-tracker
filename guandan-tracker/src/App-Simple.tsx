@@ -738,6 +738,13 @@ const App: React.FC = () => {
       top: null,
       right: null
     });
+    
+    // 重置回合状态
+    setRoundState({
+      lastActivePlayer: null,
+      passCount: 0,
+      roundInProgress: false
+    });
   };
 
   // 重新开始游戏
@@ -780,6 +787,13 @@ const App: React.FC = () => {
       left: null,
       top: null,
       right: null
+    });
+    
+    // 重置回合状态
+    setRoundState({
+      lastActivePlayer: null,
+      passCount: 0,
+      roundInProgress: false
     });
   };
 
@@ -1009,6 +1023,13 @@ const App: React.FC = () => {
     setSelectedCards(new Set());
     resetMultiSelectMode();
     
+    // 更新回合状态 - 有人出牌了
+    setRoundState({
+      lastActivePlayer: selectedPlayer,
+      passCount: 0, // 重置过牌计数
+      roundInProgress: true
+    });
+
     // 自动切换到下一个玩家
     setSelectedPlayer(getNextPlayer(selectedPlayer));
   };
@@ -1071,6 +1092,17 @@ const App: React.FC = () => {
     left: null,
     top: null,
     right: null
+  });
+
+  // 回合管理状态
+  const [roundState, setRoundState] = useState<{
+    lastActivePlayer: PlayerPosition | null; // 最后一个出牌的玩家
+    passCount: number; // 连续过牌次数
+    roundInProgress: boolean; // 是否有回合进行中
+  }>({
+    lastActivePlayer: null,
+    passCount: 0,
+    roundInProgress: false
   });
 
   // 检查游戏是否结束以及获胜玩家
@@ -1535,13 +1567,23 @@ const App: React.FC = () => {
                 >
                   ← 切换
                 </button>
-                <span className="inline-block bg-green-100 text-green-800 px-3 py-1 rounded-full text-xs font-medium">
-                  🎮 当前: {
-                    selectedPlayer === 'bottom' ? '我' :
-                    selectedPlayer === 'left' ? '对手一' :
-                    selectedPlayer === 'top' ? '队友' : '对手二'
-                  }
-                </span>
+                <div className="flex flex-col items-center space-y-1">
+                  <span className="inline-block bg-green-100 text-green-800 px-3 py-1 rounded-full text-xs font-medium">
+                    🎮 当前: {
+                      selectedPlayer === 'bottom' ? '我' :
+                      selectedPlayer === 'left' ? '对手一' :
+                      selectedPlayer === 'top' ? '队友' : '对手二'
+                    }
+                  </span>
+                  {roundState.roundInProgress && roundState.lastActivePlayer && (
+                    <span className="text-xs text-gray-600">
+                      {roundState.lastActivePlayer === 'bottom' ? '我' :
+                       roundState.lastActivePlayer === 'left' ? '对手一' :
+                       roundState.lastActivePlayer === 'top' ? '队友' : '对手二'} 
+                      出牌 · 已过牌{roundState.passCount}家
+                    </span>
+                  )}
+                </div>
                 <button
                   onClick={() => setSelectedPlayer(getNextPlayer(selectedPlayer))}
                   className="px-2 py-1 bg-gray-500 text-white rounded text-xs hover:bg-gray-600 transition-colors"
@@ -1731,12 +1773,31 @@ const App: React.FC = () => {
                     if (isRecording) {
                       recordPass(selectedPlayer);
                     }
-                    // 切换到下一个玩家
-                    setSelectedPlayer(getNextPlayer(selectedPlayer));
+                    
+                    // 更新回合状态 - 有人过牌了
+                    const newPassCount = roundState.passCount + 1;
+                    
+                    // 检查是否三家都过牌了
+                    if (newPassCount >= 3 && roundState.lastActivePlayer) {
+                      // 三家过牌，最后出牌的玩家重新获得出牌权
+                      setRoundState({
+                        lastActivePlayer: null,
+                        passCount: 0,
+                        roundInProgress: false
+                      });
+                      setSelectedPlayer(roundState.lastActivePlayer);
+                    } else {
+                      // 继续过牌，更新状态并切换到下一个玩家
+                      setRoundState(prev => ({
+                        ...prev,
+                        passCount: newPassCount
+                      }));
+                      setSelectedPlayer(getNextPlayer(selectedPlayer));
+                    }
                   }}
                   className="px-4 py-2 bg-orange-500 text-white rounded text-sm hover:bg-orange-600 transition-colors"
                 >
-                  🚫 过牌
+                  🚫 过牌 {roundState.roundInProgress && roundState.passCount > 0 ? `(${roundState.passCount}/3)` : ''}
                 </button>
               </div>
             )}
