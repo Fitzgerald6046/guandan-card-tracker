@@ -67,12 +67,17 @@ const App: React.FC = () => {
   
   // AI功能
   const {
+    playHistory: aiPlayHistory,
     aiAnalysis,
     aiEnabled,
     setAIEnabled,
     triggerAIAnalysis,
     getPassAnalysis,
-    getBreakingAnalysis
+    getBreakingAnalysis,
+    recordPlay,
+    recordPass,
+    startRecording,
+    isRecording
   } = usePlayHistory();
 
   // 回放控制接口
@@ -665,6 +670,10 @@ const App: React.FC = () => {
     console.log('底家手牌数量:', handInput.playerHands.bottom.length);
     console.log('底家手牌:', handInput.playerHands.bottom);
     
+    // 启动AI记录
+    startRecording();
+    console.log('AI记录已启动');
+    
     // 检查是否所有玩家都已设置手牌
     const bottomHasCards = handInput.playerHands.bottom.length > 0;
     const otherPlayersReady = ['left', 'top', 'right'].every(pos => {
@@ -936,6 +945,49 @@ const App: React.FC = () => {
     };
     
     setPlayHistory(prev => [...prev, playRecord]);
+    
+    // AI系统记录出牌（连接AI分析）
+    if (handInput.gameStarted && isRecording) {
+      const remainingCardsCount = 27 - Object.entries(playedCards).filter(([, player]) => player === selectedPlayer).length;
+      
+      // 将验证类型映射到AI系统的PlayType
+      const mapValidationTypeToPlayType = (validationType: string) => {
+        const typeMap: Record<string, any> = {
+          'single': 'single',
+          'pair': 'pair',
+          'triple': 'triple',
+          'triple_with_pair': 'triple_with_pair',
+          'airplane': 'plane',
+          'consecutive_pairs': 'pair_straight',
+          'wooden_board': 'triple_straight',
+          'steel_board': 'bomb_four',
+          'straight': 'straight',
+          'flush_straight': 'straight_flush',
+          'bomb': 'bomb_four',
+          'four_kings': 'bomb_four'
+        };
+        return typeMap[validationType] || 'single';
+      };
+      
+      // 转换Card对象以匹配AI系统类型
+      const aiCards = selectedCardObjects.map(card => ({
+        ...card,
+        isPlayed: false,
+        isSelected: false,
+        timestamp: Date.now(),
+        suit: card.suit as any,
+        rank: card.rank as any
+      }));
+      
+      recordPlay({
+        playerPosition: selectedPlayer,
+        cards: aiCards,
+        type: mapValidationTypeToPlayType(validation.type || 'single'),
+        cardsBeforePlay: remainingCardsCount,
+        isActivePlay: true,
+        description: `${selectedPlayer} 出了${selectedCardObjects.length}张牌 (${validation.description})`
+      });
+    }
     
     // 将卡牌标记为已出
     const newPlayedCards = { ...playedCards };
@@ -1667,6 +1719,25 @@ const App: React.FC = () => {
                     {handInput.isInputMode ? '确认选择' : '确认出牌'}
                   </button>
                 </div>
+              </div>
+            )}
+
+            {/* 游戏进行中且无选择卡牌时显示过牌按钮 */}
+            {handInput.gameStarted && selectedCards.size === 0 && (
+              <div className="mb-4 flex items-center justify-center bg-orange-50 border border-orange-200 rounded-lg p-3">
+                <button
+                  onClick={() => {
+                    // 记录过牌到AI系统
+                    if (isRecording) {
+                      recordPass(selectedPlayer);
+                    }
+                    // 切换到下一个玩家
+                    setSelectedPlayer(getNextPlayer(selectedPlayer));
+                  }}
+                  className="px-4 py-2 bg-orange-500 text-white rounded text-sm hover:bg-orange-600 transition-colors"
+                >
+                  🚫 过牌
+                </button>
               </div>
             )}
 
