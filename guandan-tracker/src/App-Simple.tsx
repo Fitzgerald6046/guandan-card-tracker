@@ -8,6 +8,8 @@ import CardImage from './components/CardImage';
 import { validateCardType } from './utils/guandanRules';
 import { GameReplay } from './components/GameReplay';
 import { useGameHistory } from './hooks/useGameHistory';
+import { usePlayHistory } from './hooks/usePlayHistory';
+import { AIAssistant } from './components/AIAssistant';
 
 // 简化的类型定义
 type GameRank = 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
@@ -49,6 +51,7 @@ const App: React.FC = () => {
   const [showReplay, setShowReplay] = useState(false);
   const [showGameHistory, setShowGameHistory] = useState(false);
   const [currentReplayGameId, setCurrentReplayGameId] = useState<string | null>(null);
+  const [showAIAssistant, setShowAIAssistant] = useState(true); // AI助手开关
   
   // 回放功能 
   const { 
@@ -61,6 +64,16 @@ const App: React.FC = () => {
     loadGameRecord,
     gameRecords
   } = useGameHistory();
+  
+  // AI功能
+  const {
+    aiAnalysis,
+    aiEnabled,
+    setAIEnabled,
+    triggerAIAnalysis,
+    getPassAnalysis,
+    getBreakingAnalysis
+  } = usePlayHistory();
 
   // 回放控制接口
   const replayControl = {
@@ -1248,6 +1261,19 @@ const App: React.FC = () => {
               🎬 回放
             </button>
             
+            {/* AI助手切换按钮 */}
+            <button
+              onClick={() => setShowAIAssistant(!showAIAssistant)}
+              className={`px-3 py-2 rounded text-sm transition-colors ${
+                showAIAssistant 
+                  ? 'bg-blue-500 text-white hover:bg-blue-600' 
+                  : 'bg-gray-300 text-gray-700 hover:bg-gray-400'
+              }`}
+              title="AI智能助手"
+            >
+              🤖 AI助手
+            </button>
+            
             <button
               onClick={() => setShowSettings(true)}
               className="p-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded transition-colors"
@@ -2234,6 +2260,22 @@ const App: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+      
+      {/* AI助手组件 */}
+      {showAIAssistant && (
+        <AIAssistant
+          aiAnalysis={aiAnalysis}
+          passAnalysis={getPassAnalysis()}
+          breakingAnalysis={getBreakingAnalysis()}
+          enabled={aiEnabled}
+          onToggle={setAIEnabled}
+          onRefresh={triggerAIAnalysis}
+          onAcceptSuggestion={(suggestion) => {
+            console.log('AI建议:', suggestion);
+            // 这里可以添加接受建议的逻辑
+          }}
+        />
       )}
     </div>
   );

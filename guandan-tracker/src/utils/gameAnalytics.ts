@@ -9,7 +9,12 @@ import type {
   PlayerPosition, 
   Team,
   Suit,
-  Rank
+  Rank,
+  PlayRecord,
+  AIAnalysisResult,
+  CardConstraint,
+  PassAnalysis,
+  BreakingPatternAnalysis
 } from '../types/game';
 import { PlayerPosition as Pos } from '../types/game';
 import { 
@@ -667,6 +672,322 @@ export function exportGameData(
   return JSON.stringify(exportData, null, 2);
 }
 
+// ==================== 增强AI推理引擎 ====================
+
+/**
+ * 增强的概率计算引擎
+ * 基于现有gameAnalytics功能，添加深度推理算法
+ */
+export class EnhancedProbabilityEngine {
+  
+  /**
+   * 分析过牌行为 - 强否定性推理
+   * 当玩家过牌时，可以强烈推断其无法打过当前牌型
+   */
+  analyzePassBehavior(playHistory: PlayRecord[]): Map<PlayerPosition, CardConstraint[]> {
+    const playerConstraints = new Map<PlayerPosition, CardConstraint[]>();
+    
+    // 按回合组织出牌记录
+    const roundRecords = new Map<number, PlayRecord[]>();
+    playHistory.forEach(record => {
+      const roundIndex = record.roundIndex || 0;
+      if (!roundRecords.has(roundIndex)) {
+        roundRecords.set(roundIndex, []);
+      }
+      roundRecords.get(roundIndex)!.push(record);
+    });
+    
+    // 分析每一轮的过牌行为
+    roundRecords.forEach((roundPlays, roundIndex) => {
+      const leadingPlay = roundPlays.find(play => play.isActivePlay);
+      if (!leadingPlay) return;
+      
+      const passPlayers = roundPlays.filter(play => play.type === 'pass');
+      
+      passPlayers.forEach(passRecord => {
+        const constraints = playerConstraints.get(passRecord.playerPosition) || [];
+        
+        // 推断该玩家缺少的牌型
+        const newConstraint: CardConstraint = {
+          playerPosition: passRecord.playerPosition,
+          cannotHave: this.inferMissingRanks(leadingPlay),
+          mustHave: [],
+          probability: 0.9, // 过牌行为的可信度很高
+          source: 'pass_action',
+          timestamp: passRecord.timestamp
+        };
+        
+        constraints.push(newConstraint);
+        playerConstraints.set(passRecord.playerPosition, constraints);
+      });
+    });
+    
+    return playerConstraints;
+  }
+  
+  /**
+   * 分析拆牌行为 - 牌型结构推理
+   * 检测异常出牌模式，推断手牌结构
+   */
+  analyzeBreakingPatterns(playHistory: PlayRecord[]): BreakingPatternAnalysis[] {
+    const breakingAnalyses: BreakingPatternAnalysis[] = [];
+    
+    playHistory.forEach((record, index) => {
+      if (this.isUnusualPlay(record, playHistory.slice(0, index))) {
+        const analysis: BreakingPatternAnalysis = {
+          playerPosition: record.playerPosition,
+          brokenPattern: this.inferBrokenPattern(record),
+          reasoning: this.inferBreakingReason(record, playHistory.slice(0, index)),
+          revealedInfo: this.analyzeRevealedInfo(record)
+        };
+        
+        breakingAnalyses.push(analysis);
+      }
+    });
+    
+    return breakingAnalyses;
+  }
+  
+  /**
+   * 残局精确推理 - 当手牌数少时的精确推断
+   */
+  analyzeEndgameCards(
+    cards: Card[],
+    cardOwnership: Record<string, PlayerPosition>,
+    playHistory: PlayRecord[],
+    currentRank: GameRank
+  ): Map<PlayerPosition, Card[]> {
+    const playerCards = new Map<PlayerPosition, Card[]>();
+    
+    // 计算各玩家剩余牌数
+    const remainingCounts = this.calculateRemainingCards(cardOwnership, playHistory);
+    
+    // 当玩家剩余牌数 <= 10张时，启用精确推理
+    Object.entries(remainingCounts).forEach(([pos, count]) => {
+      const position = pos as PlayerPosition;
+      if (count <= 10) {
+        const inferredCards = this.inferRemainingCards(
+          position, 
+          cards, 
+          cardOwnership, 
+          playHistory, 
+          currentRank
+        );
+        playerCards.set(position, inferredCards);
+      }
+    });
+    
+    return playerCards;
+  }
+  
+  /**
+   * 概率分布计算 - 基于多重证据的概率推理
+   */
+  calculateCardProbabilities(
+    cards: Card[],
+    cardOwnership: Record<string, PlayerPosition>,
+    playHistory: PlayRecord[],
+    currentRank: GameRank
+  ): Record<string, Record<PlayerPosition, number>> {
+    const probabilities: Record<string, Record<PlayerPosition, number>> = {};
+    
+    // 获取约束条件
+    const passConstraints = this.analyzePassBehavior(playHistory);
+    const breakingPatterns = this.analyzeBreakingPatterns(playHistory);
+    
+    // 为每张未分配的牌计算概率
+    cards.forEach(card => {
+      if (!cardOwnership[card.id]) {
+        probabilities[card.id] = this.calculateSingleCardProbability(
+          card,
+          cards,
+          cardOwnership,
+          playHistory,
+          passConstraints,
+          breakingPatterns,
+          currentRank
+        );
+      }
+    });
+    
+    return probabilities;
+  }
+  
+  // ==================== 私有辅助方法 ====================
+  
+  /**
+   * 根据出牌类型推断缺少的牌面
+   */
+  private inferMissingRanks(leadingPlay: PlayRecord): GameRank[] {
+    const missingRanks: GameRank[] = [];
+    
+    switch (leadingPlay.type) {
+      case 'bomb_four':
+      case 'bomb_five':
+      case 'bomb_six':
+        // 过炸弹说明没有更大的炸弹或王牌
+        missingRanks.push(15 as any); // 王牌
+        break;
+      case 'straight':
+        // 过顺子可能缺少相应长度的顺子或炸弹
+        break;
+      default:
+        // 根据具体牌型推断
+        break;
+    }
+    
+    return missingRanks;
+  }
+  
+  /**
+   * 检测是否为异常出牌
+   */
+  private isUnusualPlay(record: PlayRecord, previousPlays: PlayRecord[]): boolean {
+    // 检测高价值单牌（可能是拆牌）
+    if (record.type === 'single' && record.cards.length === 1) {
+      const card = record.cards[0];
+      return card.rank >= 12; // J、Q、K、A单出可能是拆牌
+    }
+    
+    // 检测其他异常模式
+    return false;
+  }
+  
+  /**
+   * 推断被拆掉的牌型
+   */
+  private inferBrokenPattern(record: PlayRecord): any {
+    if (record.type === 'single') {
+      return 'pair'; // 假设拆了对子
+    }
+    return 'unknown';
+  }
+  
+  /**
+   * 推断拆牌原因
+   */
+  private inferBreakingReason(record: PlayRecord, history: PlayRecord[]): 'forced' | 'strategic' | 'defensive' | 'unknown' {
+    // 简化推理：如果是被动出牌，可能是被迫拆牌
+    return record.isActivePlay ? 'strategic' : 'forced';
+  }
+  
+  /**
+   * 分析暴露的手牌信息
+   */
+  private analyzeRevealedInfo(record: PlayRecord): string[] {
+    const info: string[] = [];
+    
+    if (record.type === 'single' && record.cards[0].rank >= 12) {
+      info.push(`可能缺少${record.cards[0].rank}的对子或更大牌型`);
+    }
+    
+    return info;
+  }
+  
+  /**
+   * 计算各玩家剩余牌数
+   */
+  private calculateRemainingCards(
+    cardOwnership: Record<string, PlayerPosition>,
+    playHistory: PlayRecord[]
+  ): Record<PlayerPosition, number> {
+    const counts: Record<PlayerPosition, number> = {
+      bottom: 27, left: 27, top: 27, right: 27
+    };
+    
+    // 根据出牌记录减去已出的牌
+    playHistory.forEach(record => {
+      if (record.type !== 'pass') {
+        counts[record.playerPosition] -= record.cards.length;
+      }
+    });
+    
+    return counts;
+  }
+  
+  /**
+   * 推断玩家的剩余牌（残局精确推理）
+   */
+  private inferRemainingCards(
+    player: PlayerPosition,
+    allCards: Card[],
+    cardOwnership: Record<string, PlayerPosition>,
+    playHistory: PlayRecord[],
+    currentRank: GameRank
+  ): Card[] {
+    // 获取该玩家已确认拥有的牌
+    const ownedCards = allCards.filter(card => cardOwnership[card.id] === player);
+    
+    // 获取该玩家已出的牌
+    const playedCards = playHistory
+      .filter(record => record.playerPosition === player && record.type !== 'pass')
+      .flatMap(record => record.cards);
+    
+    // 剩余牌 = 拥有的牌 - 已出的牌
+    const remainingCards = ownedCards.filter(card => 
+      !playedCards.some(played => played.id === card.id)
+    );
+    
+    return remainingCards;
+  }
+  
+  /**
+   * 计算单张牌的持有概率
+   */
+  private calculateSingleCardProbability(
+    card: Card,
+    allCards: Card[],
+    cardOwnership: Record<string, PlayerPosition>,
+    playHistory: PlayRecord[],
+    passConstraints: Map<PlayerPosition, CardConstraint[]>,
+    breakingPatterns: BreakingPatternAnalysis[],
+    currentRank: GameRank
+  ): Record<PlayerPosition, number> {
+    // 基础均匀分布
+    const baseProbability = 0.25; // 四个玩家均分
+    const probabilities: Record<PlayerPosition, number> = {
+      bottom: baseProbability,
+      left: baseProbability,
+      top: baseProbability,
+      right: baseProbability
+    };
+    
+    // 根据过牌约束调整概率
+    passConstraints.forEach((constraints, player) => {
+      constraints.forEach(constraint => {
+        if (constraint.cannotHave.includes(card.rank as GameRank)) {
+          probabilities[player] *= 0.1; // 大幅降低概率
+        }
+      });
+    });
+    
+    // 根据拆牌行为调整概率
+    breakingPatterns.forEach(pattern => {
+      if (this.cardRelatedToPattern(card, pattern)) {
+        probabilities[pattern.playerPosition] *= 1.2; // 略微提高概率
+      }
+    });
+    
+    // 归一化概率
+    const total = Object.values(probabilities).reduce((sum, prob) => sum + prob, 0);
+    if (total > 0) {
+      Object.keys(probabilities).forEach(pos => {
+        probabilities[pos as PlayerPosition] /= total;
+      });
+    }
+    
+    return probabilities;
+  }
+  
+  /**
+   * 判断卡牌是否与拆牌模式相关
+   */
+  private cardRelatedToPattern(card: Card, pattern: BreakingPatternAnalysis): boolean {
+    // 简化判断：如果是同样的牌面，可能相关
+    return pattern.revealedInfo.some(info => info.includes(card.rank.toString()));
+  }
+}
+
 // 导出所有函数
 export default {
   calculateCardStatistics,
@@ -675,7 +996,8 @@ export default {
   analyzePlayProbabilities,
   generateGameReport,
   calculateWinProbability,
-  exportGameData
+  exportGameData,
+  EnhancedProbabilityEngine
 };
 
 // 导出类型
