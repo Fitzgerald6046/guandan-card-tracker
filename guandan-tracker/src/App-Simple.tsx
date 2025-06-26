@@ -3,59 +3,84 @@
  * 使用 SVG 生成的卡牌图像进行选择操作
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import CardImage from './components/CardImage';
 import { validateCardType } from './utils/guandanRules';
 import { GameReplay } from './components/GameReplay';
 import { useGameHistory } from './hooks/useGameHistory';
 import { usePlayHistory } from './hooks/usePlayHistory';
 import { AIAssistant } from './components/AIAssistant';
-
-// 简化的类型定义
-type GameRank = 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
-type PlayerPosition = 'bottom' | 'left' | 'top' | 'right';
-
-interface Card {
-  id: string;
-  rank: GameRank | 15; // 15表示王
-  isRankCard: boolean;
-  isWildCard: boolean;
-  isHearts: boolean; // 是否为红心牌
-  suit: string; // 花色信息
-  displayName: string;
-}
-
-// 游戏状态
-interface GameState {
-  phase: 'setup' | 'input' | 'playing' | 'finished'; // 游戏阶段
-  round: number; // 当前回合数
-  startTime: number | null; // 游戏开始时间
-  totalPlays: number; // 总出牌次数
-}
-
-// 手牌输入状态
-interface HandInputState {
-  isInputMode: boolean;
-  selectedPlayerForInput: PlayerPosition | null;
-  playerHands: Record<PlayerPosition, Card[]>;
-  revealedCards: Record<PlayerPosition, string[]>; // 明牌的cardId数组
-  gameStarted: boolean; // 游戏是否已开始
-  currentRevealedPlayer: PlayerPosition | null; // 当前可使用明牌的玩家
-}
+import { VoiceControl } from './components/VoiceControl';
+import type {
+  GameState,
+  Card,
+  GameRank,
+  PlayerPosition,
+  PlayRecord,
+  Player
+} from './types/game';
+import {
+  Suit,
+  Rank,
+  GameStatus,
+  RANK_DISPLAY_NAMES
+} from './types/game';
 
 const App: React.FC = () => {
-  const [currentRank, setCurrentRank] = useState<GameRank>(7);
-  const [selectedPlayer, setSelectedPlayer] = useState<PlayerPosition>('bottom');
+  // 游戏状态管理
+  const [gameState, setGameState] = useState<GameState>(() => {
+    const initialRank: GameRank = 7;
+    const initialPlayers: Player[] = [
+      { id: 'p1', name: '我', position: 'bottom', team: 1, cards: [], remainingCount: 27, isCurrentPlayer: true, stats: { playedCards: 0, rankCardCount: 0, wildCardCount: 0, roundWins: 0 } },
+      { id: 'p2', name: '对手一', position: 'left', team: 2, cards: [], remainingCount: 27, isCurrentPlayer: false, stats: { playedCards: 0, rankCardCount: 0, wildCardCount: 0, roundWins: 0 } },
+      { id: 'p3', name: '队友', position: 'top', team: 1, cards: [], remainingCount: 27, isCurrentPlayer: false, stats: { playedCards: 0, rankCardCount: 0, wildCardCount: 0, roundWins: 0 } },
+      { id: 'p4', name: '对手二', position: 'right', team: 2, cards: [], remainingCount: 27, isCurrentPlayer: false, stats: { playedCards: 0, rankCardCount: 0, wildCardCount: 0, roundWins: 0 } },
+    ];
+
+    const initialCards = generateSortedCards(initialRank); // 初始生成所有卡牌
+
+    return {
+      gameId: `game-${Date.now()}`,
+      status: GameStatus.WAITING,
+      config: {
+        rank: { current: initialRank, next: initialRank, history: [] },
+        tributeEnabled: false,
+      },
+      players: initialPlayers,
+      currentPlayerPosition: 'bottom',
+      currentRank: initialRank,
+      allCards: initialCards.map(card => ({ ...card, isPlayed: false, isSelected: false, isRankCard: false, isWildCard: false, timestamp: Date.now() })), // 确保所有卡牌都有isPlayed属性
+      playHistory: [],
+      currentRound: {
+        roundNumber: 1,
+        startTime: null,
+        passCount: 0,
+        isFinished: false,
+      },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+  });
+
+  // 从gameState中解构常用变量
+  const {
+    config: { rank: { current: currentRank } },
+    currentPlayerPosition: selectedPlayer,
+    allCards,
+    playHistory,
+    players
+  } = gameState;
+
   const [selectedCards, setSelectedCards] = useState<Set<string>>(new Set());
   const [showSettings, setShowSettings] = useState(false);
   const [showReplay, setShowReplay] = useState(false);
   const [showGameHistory, setShowGameHistory] = useState(false);
   const [currentReplayGameId, setCurrentReplayGameId] = useState<string | null>(null);
   const [showAIAssistant, setShowAIAssistant] = useState(true); // AI助手开关
-  
-  // 回放功能 
-  const { 
-    replayState, 
+
+  // 回放功能
+  const {
+    replayState,
     setReplayProgress,
     setReplaySpeed,
     startReplay,
@@ -64,7 +89,7 @@ const App: React.FC = () => {
     loadGameRecord,
     gameRecords
   } = useGameHistory();
-  
+
   // AI功能
   const {
     playHistory: aiPlayHistory,
@@ -88,24 +113,19 @@ const App: React.FC = () => {
       // 先保存当前游戏状态为临时记录用于回放
       try {
         const tempGameId = saveCurrentGame(
-          cards.map(card => ({
+          allCards.map(card => ({
             ...card,
-            suit: card.rank === 15 ? null : (card.suit as any),
-            isPlayed: playedCards[card.id] ? true : false,
+            suit: card.rank === Rank.JOKER_SMALL || card.rank === Rank.JOKER_BIG ? null : (card.suit as any),
+            isPlayed: card.isPlayed,
             isSelected: false,
             timestamp: Date.now()
-          })), 
-          playedCards, 
-          currentRank, 
-          [
-            { id: 'p1', position: 'bottom', name: '我', team: 1 },
-            { id: 'p2', position: 'left', name: '对手一', team: 2 },
-            { id: 'p3', position: 'top', name: '队友', team: 1 },
-            { id: 'p4', position: 'right', name: '对手二', team: 2 }
-          ],
+          })),
+          allCards.reduce((acc, card) => { if (card.isPlayed) acc[card.id] = card.isPlayed; return acc; }, {} as Record<string, PlayerPosition>),
+          currentRank,
+          players,
           gameState,
           {
-            isCompleted: gameState.phase === 'finished',
+            isCompleted: gameState.status === GameStatus.FINISHED,
             winningTeam: checkGameEnd().winningTeam as 1 | 2 | undefined,
             notes: `临时回放记录 - ${getGameDuration()}`,
             tags: ['回放', '临时']
@@ -120,18 +140,9 @@ const App: React.FC = () => {
     },
     stop: stopReplay
   };
-  
 
-  // 游戏状态管理
-  const [gameState, setGameState] = useState<GameState>({
-    phase: 'setup',
-    round: 1,
-    startTime: null,
-    totalPlays: 0
-  });
-  
   // 手牌输入状态
-  const [handInput, setHandInput] = useState<HandInputState>({
+  const [handInput, setHandInput] = useState<any>({
     isInputMode: false,
     selectedPlayerForInput: null,
     playerHands: {
@@ -150,101 +161,108 @@ const App: React.FC = () => {
     currentRevealedPlayer: null
   });
 
-  // 生成竖向排列的牌面
-  const generateSortedCards = (): Card[] => {
-    const cards: Card[] = [];
-    
-    // 排列顺序：2-A (不包括当前级数牌) -> 当前级数牌 -> 大小王
-    const baseRanks = [];
-    for (let rank = 2; rank <= 14; rank++) {
-      if (rank !== currentRank) {
-        baseRanks.push(rank);
-      }
+  // 生成竖向排列的牌面 (移到组件外部，确保能访问到顶层导入)
+function generateSortedCards(currentRank: GameRank): Card[] {
+  const cards: Card[] = [];
+  
+  // 排列顺序：2-A (不包括当前级数牌) -> 当前级数牌 -> 大小王
+  const baseRanks = [];
+  for (let rank = 2; rank <= 14; rank++) {
+    if (rank !== currentRank) {
+      baseRanks.push(rank);
     }
-    
-    // 先添加普通牌 (2-A，不包括当前级数)
-    // 每个等级8张牌：黑桃2张、红心2张、梅花2张、方块2张
-    baseRanks.forEach(rank => {
-      for (let i = 0; i < 8; i++) {
-        const cardId = `${rank}-${i}`;
-        // 确定花色：0-1黑桃，2-3红心，4-5梅花，6-7方块
-        const suitIndex = Math.floor(i / 2);
-        const suits = ['spades', 'hearts', 'clubs', 'diamonds'];
-        const isHearts = suits[suitIndex] === 'hearts';
-        
-        cards.push({
-          id: cardId,
-          rank: rank as GameRank,
-          isRankCard: false,
-          isWildCard: false,
-          isHearts, // 添加红心标识
-          suit: suits[suitIndex], // 添加花色信息
-          displayName: rank === 11 ? 'J' : rank === 12 ? 'Q' : rank === 13 ? 'K' : rank === 14 ? 'A' : rank.toString()
-        });
-      }
-    });
-    
-    // 添加当前级数牌 (8张，前6张黑色，后2张红色配牌)
+  }
+  
+  // 先添加普通牌 (2-A，不包括当前级数)
+  // 每个等级8张牌：黑桃2张、红心2张、梅花2张、方块2张
+  baseRanks.forEach(rank => {
     for (let i = 0; i < 8; i++) {
-      const cardId = `${currentRank}-${i}`;
-      const isWildCard = i >= 6; // 后两张是红心配牌
-      // 确定花色：0-1黑桃，2-3红心，4-5梅花，6-7红心配牌
+      const cardId = `${rank}-${i}`;
+      // 确定花色：0-1黑桃，2-3红心，4-5梅花，6-7方块
       const suitIndex = Math.floor(i / 2);
-      const suits = ['spades', 'hearts', 'clubs', 'hearts']; // 最后两张是红心配牌
-      const isHearts = suits[suitIndex] === 'hearts';
+      const suits = [Suit.SPADES, Suit.HEARTS, Suit.CLUBS, Suit.DIAMONDS];
+      const isHearts = suits[suitIndex] === Suit.HEARTS;
       
       cards.push({
         id: cardId,
-        rank: currentRank,
-        isRankCard: true,
-        isWildCard,
+        rank: rank as Rank,
+        isRankCard: false,
+        isWildCard: false,
         isHearts, // 添加红心标识
         suit: suits[suitIndex], // 添加花色信息
-        displayName: currentRank === 11 ? 'J' : currentRank === 12 ? 'Q' : currentRank === 13 ? 'K' : currentRank === 14 ? 'A' : currentRank.toString()
+        displayName: RANK_DISPLAY_NAMES[rank as Rank],
+        isPlayed: false,
+        isSelected: false,
+        timestamp: Date.now(),
       });
     }
+  });
+  
+  // 添加当前级数牌 (8张，前6张黑色，后2张红色配牌)
+  for (let i = 0; i < 8; i++) {
+    const cardId = `${currentRank}-${i}`;
+    const isWildCard = i >= 6; // 后两张是红心配牌
+    // 确定花色：0-1黑桃，2-3红心，4-5梅花，6-7红心配牌
+    const suitIndex = Math.floor(i / 2);
+    const suits = [Suit.SPADES, Suit.HEARTS, Suit.CLUBS, Suit.HEARTS]; // 最后两张是红心配牌
+    const isHearts = suits[suitIndex] === Suit.HEARTS;
     
-    // 添加大小王 (4张配牌)
-    for (let i = 0; i < 4; i++) {
-      cards.push({
-        id: `joker-${i}`,
-        rank: 15,
-        isRankCard: false,
-        isWildCard: true,
-        isHearts: false, // 大小王不是红心
-        suit: 'joker', // 特殊花色
-        displayName: i < 2 ? '小王' : '大王'
-      });
-    }
-    
-    return cards;
-  };
-
-  const cards = generateSortedCards();
+    cards.push({
+      id: cardId,
+      rank: currentRank,
+      isRankCard: true,
+      isWildCard,
+      isHearts, // 添加红心标识
+      suit: suits[suitIndex], // 添加花色信息
+      displayName: RANK_DISPLAY_NAMES[currentRank as Rank],
+      isPlayed: false,
+      isSelected: false,
+      timestamp: Date.now(),
+    });
+  }
+  
+  // 添加大小王 (4张配牌)
+  for (let i = 0; i < 4; i++) {
+    cards.push({
+      id: `joker-${i}`,
+      rank: i < 2 ? Rank.JOKER_SMALL : Rank.JOKER_BIG,
+      isRankCard: false,
+      isWildCard: true,
+      isHearts: false, // 大小王不是红心
+      suit: null, // 特殊花色
+      displayName: i < 2 ? '小王' : '大王',
+      isPlayed: false,
+      isSelected: false,
+      timestamp: Date.now(),
+    });
+  }
+  
+  return cards;
+}
 
   // 加载保存的游戏
   const loadSavedGame = (gameRecord: any) => {
     try {
       console.log('加载游戏记录:', gameRecord);
-      
+
       // 重置当前游戏状态
-      setGameState({
-        phase: 'finished', // 加载的游戏都视为已完成
-        round: 1,
-        startTime: gameRecord.timestamp,
-        totalPlays: Object.keys(gameRecord.finalCardOwnership).length
-      });
-      
-      // 设置级数
-      setCurrentRank(gameRecord.currentRank);
-      
-      // 重置已出牌记录
-      setPlayedCards(gameRecord.finalCardOwnership || {});
-      
+      setGameState(prev => ({
+        ...prev,
+        gameId: gameRecord.id,
+        status: gameRecord.isCompleted ? GameStatus.FINISHED : GameStatus.PLAYING,
+        config: { ...prev.config, rank: { ...prev.config.rank, current: gameRecord.currentRank } },
+        players: gameRecord.players || prev.players, // 加载玩家信息
+        currentPlayerPosition: gameRecord.currentPlayerPosition || prev.currentPlayerPosition,
+        allCards: gameRecord.allCards || prev.allCards, // 加载所有卡牌状态
+        playHistory: gameRecord.playHistory || prev.playHistory,
+        currentRound: gameRecord.currentRound || prev.currentRound,
+        createdAt: gameRecord.createdAt || prev.createdAt,
+        updatedAt: gameRecord.updatedAt || prev.updatedAt,
+      }));
+
       // 清空当前选择
       setSelectedCards(new Set());
-      setSelectedPlayer('bottom');
-      
+
       // 重置手牌输入状态
       setHandInput({
         isInputMode: false,
@@ -264,32 +282,9 @@ const App: React.FC = () => {
         gameStarted: true,
         currentRevealedPlayer: null
       });
-      
-      // 设置玩家排名（如果有的话）
-      if (gameRecord.winningTeam) {
-        // 简化处理：假设获胜队伍的玩家排名靠前
-        if (gameRecord.winningTeam === 1) {
-          setPlayerRankings({
-            bottom: 1,
-            top: 2,
-            left: 3,
-            right: 4
-          });
-        } else {
-          setPlayerRankings({
-            left: 1,
-            right: 2,
-            bottom: 3,
-            top: 4
-          });
-        }
-      }
-      
-      // 关闭历史记录弹窗
-      setShowGameHistory(false);
-      
+
       alert(`游戏已加载！\n游戏ID: ${gameRecord.id}\n级数: ${gameRecord.currentRank}\n状态: ${gameRecord.isCompleted ? '已完成' : '进行中'}`);
-      
+
     } catch (error) {
       console.error('加载游戏失败:', error);
       alert('加载游戏失败，请稍后重试');
@@ -300,7 +295,7 @@ const App: React.FC = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
   const [isTouchDevice, setIsTouchDevice] = useState(false);
-  
+
 
   // 玩家颜色设置
   const [playerColors, setPlayerColors] = useState({
@@ -310,46 +305,39 @@ const App: React.FC = () => {
     right: '#3b82f6'   // 蓝色
   });
 
-  // 已出牌记录 - 每个卡牌ID对应出牌的玩家
-  const [playedCards, setPlayedCards] = useState<Record<string, PlayerPosition>>({});
-  
-  // 出牌历史记录 - 用于撤销
-  const [playHistory, setPlayHistory] = useState<Array<{
-    player: PlayerPosition;
-    cardIds: string[];
-    timestamp: number;
-  }>>([]);
-
   // 检测触摸设备
-  React.useEffect(() => {
+  useEffect(() => {
     setIsTouchDevice('ontouchstart' in window);
   }, []);
 
 
   // 游戏时长定时更新
-  React.useEffect(() => {
+  useEffect(() => {
     let timer: number;
-    
-    if (gameState.phase === 'playing' && gameState.startTime) {
+
+    if (gameState.status === GameStatus.PLAYING && gameState.currentRound.startTime) {
       timer = window.setInterval(() => {
         // 强制重新渲染来更新时间显示
         setGameState(prev => ({ ...prev }));
       }, 1000);
     }
-    
+
     return () => {
       if (timer) clearInterval(timer);
     };
-  }, [gameState.phase, gameState.startTime]);
+  }, [gameState.status, gameState.currentRound.startTime]);
 
   // 计算玩家牌数统计
-  const getPlayerCardStats = (player: PlayerPosition) => {
+  const getPlayerCardStats = (playerPos: PlayerPosition) => {
+    const player = players.find(p => p.position === playerPos);
+    if (!player) return { played: 0, remaining: 0, revealed: 0 };
+
     if (handInput.isInputMode) {
       // 手牌输入模式：显示明牌设置状态
-      const inputCount = handInput.playerHands[player].length;
-      const revealedCount = handInput.revealedCards[player].length;
-      
-      if (player === 'bottom') {
+      const inputCount = handInput.playerHands[playerPos].length;
+      const revealedCount = handInput.revealedCards[playerPos].length;
+
+      if (playerPos === 'bottom') {
         // 我：显示已设置的明牌数和标记数
         return {
           played: inputCount, // 显示为"明牌"数量
@@ -364,20 +352,17 @@ const App: React.FC = () => {
           revealed: revealedCount
         };
       }
-    } else if (handInput.gameStarted) {
+    } else if (gameState.status === GameStatus.PLAYING || gameState.status === GameStatus.FINISHED) {
       // 游戏进行中：显示已出牌数和剩余手牌数
-      const revealedCount = handInput.revealedCards[player].length;
-      
-      // 计算实际已出牌数（只计算已标记为已出的牌）
-      const playerPlayedCards = Object.entries(playedCards)
-        .filter(([, cardPlayer]) => cardPlayer === player)
-        .map(([cardId]) => cardId);
-      const playedCount = playerPlayedCards.length;
-      
+      const revealedCount = handInput.revealedCards[playerPos].length;
+
+      // 计算实际已出牌数
+      const playedCount = allCards.filter(card => card.isPlayed && card.id in handInput.playerHands[playerPos]).length;
+
       // 所有玩家都有27张牌，剩余手牌数 = 27 - 已出牌数
       const TOTAL_CARDS_PER_PLAYER = 27;
       const remainingCount = Math.max(0, TOTAL_CARDS_PER_PLAYER - playedCount);
-      
+
       return {
         played: playedCount, // 实际已出牌数
         remaining: remainingCount, // 剩余手牌数
@@ -385,14 +370,11 @@ const App: React.FC = () => {
       };
     } else {
       // 正常游戏模式：显示已出牌数量（无手牌设置的情况）
-      const playerPlayedCards = Object.entries(playedCards)
-        .filter(([, cardPlayer]) => cardPlayer === player)
-        .map(([cardId]) => cardId);
-      
-      const playedCount = playerPlayedCards.length;
+      const playedCount = allCards.filter(card => card.isPlayed && card.id in handInput.playerHands[playerPos]).length;
+
       // 在没有设置手牌的情况下，假设每个玩家有27张牌
       const remainingCount = Math.max(0, 27 - playedCount);
-      
+
       return {
         played: playedCount,
         remaining: remainingCount,
@@ -403,24 +385,22 @@ const App: React.FC = () => {
 
   // 检查卡牌是否可选择
   const isCardSelectable = (cardId: string): boolean => {
-    // 已出牌不可选择
-    if (playedCards[cardId]) {
-      console.log(`卡牌${cardId}已出牌，不可选择`);
+    const card = allCards.find(c => c.id === cardId);
+    if (!card || card.isPlayed) {
       return false;
     }
 
     // 手牌输入模式：所有卡牌都可选择
     if (handInput.isInputMode) {
-      console.log(`手牌输入模式，卡牌${cardId}可选择`);
       return true;
     }
 
     // 游戏开始后的严格明牌权限控制
-    if (handInput.gameStarted) {
+    if (gameState.status === GameStatus.PLAYING || gameState.status === GameStatus.FINISHED) {
       // 检查卡牌归属
       let cardOwner: PlayerPosition | null = null;
       let isRevealedCard = false;
-      
+
       for (const [player, hands] of Object.entries(handInput.playerHands)) {
         if (hands.some(card => card.id === cardId)) {
           cardOwner = player as PlayerPosition;
@@ -429,37 +409,33 @@ const App: React.FC = () => {
         }
       }
 
-      console.log(`游戏中卡牌选择检查: cardId=${cardId}, cardOwner=${cardOwner}, isRevealedCard=${isRevealedCard}, selectedPlayer=${selectedPlayer}`);
-
       // 如果卡牌属于某个玩家（明牌或手牌）
       if (cardOwner) {
-        // 严格规则：每个玩家只能选择自己的明牌
-        if (isRevealedCard) {
-          // 明牌只能由牌的归属者选择
-          const canSelect = selectedPlayer === cardOwner;
-          console.log(`${cardOwner}的明牌${cardId}权限检查: 当前玩家${selectedPlayer}, 可选择=${canSelect}`);
-          return canSelect;
-        } else {
-          // 非明牌手牌，任何人都不能选择
-          console.log(`${cardOwner}的非明牌${cardId}，不可选择`);
-          return false;
+        // 如果是我(bottom)，可以选择自己的所有手牌（明牌+暗牌）
+        if (selectedPlayer === 'bottom' && cardOwner === 'bottom') {
+          return true;
         }
+
+        // 其他玩家：只能选择自己的明牌
+        if (selectedPlayer === cardOwner && isRevealedCard) {
+          return true;
+        }
+
+        // 不是自己的牌，或者是别人的非明牌，都不能选择
+        return false;
       }
 
       // 不属于任何玩家的卡牌（公共牌库）
-      // 我(bottom)只能选择自己的明牌，不能选择公共牌库
-      // 其他玩家可以选择公共牌库的牌
+      // 我(bottom)不能选择公共牌库（因为我有实际手牌）
+      // 其他玩家可以选择公共牌库的牌来模拟出牌
       if (selectedPlayer === 'bottom') {
-        console.log(`我无法选择公共牌库卡牌${cardId}，只能选择自己的明牌`);
         return false;
       } else {
-        console.log(`${selectedPlayer}可以选择公共牌库卡牌${cardId}`);
         return true;
       }
     }
 
     // 正常模式：所有卡牌都可选择
-    console.log(`正常模式，卡牌${cardId}可选择`);
     return true;
   };
 
@@ -468,10 +444,10 @@ const App: React.FC = () => {
     // 检查卡牌是否可选择
     if (!isCardSelectable(cardId)) {
       // 游戏开始后的权限提示
-      if (handInput.gameStarted) {
+      if (gameState.status === GameStatus.PLAYING || gameState.status === GameStatus.FINISHED) {
         let cardOwner: PlayerPosition | null = null;
         let isRevealedCard = false;
-        
+
         for (const [player, hands] of Object.entries(handInput.playerHands)) {
           if (hands.some(card => card.id === cardId)) {
             cardOwner = player as PlayerPosition;
@@ -481,32 +457,36 @@ const App: React.FC = () => {
         }
 
         // 权限提示
-        if (cardOwner && selectedPlayer !== cardOwner) {
+        if (cardOwner) {
           const playerNames = {
             bottom: '我',
-            left: '下家', 
+            left: '下家',
             top: '对家',
             right: '上家'
           };
-          
-          if (cardOwner === 'bottom') {
-            alert(`这是我的明牌，只有我可以选择！请切换到"我"来出牌。`);
-          } else if (isRevealedCard) {
-            alert(`这是${playerNames[cardOwner]}的明牌，只有${playerNames[cardOwner]}可以选择！请切换到"${playerNames[cardOwner]}"来出牌。`);
-          } else {
-            alert(`这是${playerNames[cardOwner]}的手牌，任何人都不能选择。`);
+
+          if (cardOwner === 'bottom' && selectedPlayer !== 'bottom') {
+            alert(`这是我的手牌，只有我可以选择！请切换到"我"来出牌。`);
+          } else if (cardOwner !== 'bottom' && selectedPlayer === cardOwner && !isRevealedCard) {
+            alert(`这是${playerNames[cardOwner]}的暗牌，无法选择。只能选择明牌。`);
+          } else if (cardOwner !== 'bottom' && selectedPlayer !== cardOwner) {
+            if (isRevealedCard) {
+              alert(`这是${playerNames[cardOwner]}的明牌，只有${playerNames[cardOwner]}可以选择！请切换到"${playerNames[cardOwner]}"来出牌。`);
+            } else {
+              alert(`这是${playerNames[cardOwner]}的暗牌，任何人都不能选择。`);
+            }
           }
         } else if (!cardOwner && selectedPlayer === 'bottom') {
-          alert(`我只能选择自己的明牌，不能选择公共牌库的牌。`);
+          alert(`我只能选择自己的手牌，不能选择公共牌库的牌。`);
         }
       }
       return;
     }
-    
+
     setSelectedCards(prev => {
       const newSelected = new Set(prev);
       const shouldMultiSelect = forceMultiSelect || isMultiSelectMode;
-      
+
       if (shouldMultiSelect) {
         // 多选模式：切换选中状态
         if (newSelected.has(cardId)) {
@@ -523,7 +503,7 @@ const App: React.FC = () => {
           newSelected.add(cardId);
         }
       }
-      
+
       return newSelected;
     });
   };
@@ -532,7 +512,7 @@ const App: React.FC = () => {
   const handleCardClick = (cardId: string, e?: React.MouseEvent) => {
     e?.preventDefault();
     e?.stopPropagation();
-    
+
     // 手牌输入模式：使用正常的选择逻辑，通过确认按钮来添加
     // 游戏模式：正常的卡牌选择
     const isCtrlClick = e?.ctrlKey || e?.metaKey;
@@ -544,10 +524,10 @@ const App: React.FC = () => {
     // 先检查卡牌是否可选择
     if (!isCardSelectable(cardId)) {
       // 游戏开始后的权限提示
-      if (handInput.gameStarted) {
+      if (gameState.status === GameStatus.PLAYING || gameState.status === GameStatus.FINISHED) {
         let cardOwner: PlayerPosition | null = null;
         let isRevealedCard = false;
-        
+
         for (const [player, hands] of Object.entries(handInput.playerHands)) {
           if (hands.some(card => card.id === cardId)) {
             cardOwner = player as PlayerPosition;
@@ -557,28 +537,32 @@ const App: React.FC = () => {
         }
 
         // 权限提示
-        if (cardOwner && selectedPlayer !== cardOwner) {
+        if (cardOwner) {
           const playerNames = {
             bottom: '我',
-            left: '下家', 
+            left: '下家',
             top: '对家',
             right: '上家'
           };
-          
-          if (cardOwner === 'bottom') {
-            alert(`这是我的明牌，只有我可以选择！请切换到"我"来出牌。`);
-          } else if (isRevealedCard) {
-            alert(`这是${playerNames[cardOwner]}的明牌，只有${playerNames[cardOwner]}可以选择！请切换到"${playerNames[cardOwner]}"来出牌。`);
-          } else {
-            alert(`这是${playerNames[cardOwner]}的手牌，任何人都不能选择。`);
+
+          if (cardOwner === 'bottom' && selectedPlayer !== 'bottom') {
+            alert(`这是我的手牌，只有我可以选择！请切换到"我"来出牌。`);
+          } else if (cardOwner !== 'bottom' && selectedPlayer === cardOwner && !isRevealedCard) {
+            alert(`这是${playerNames[cardOwner]}的暗牌，无法选择。只能选择明牌。`);
+          } else if (cardOwner !== 'bottom' && selectedPlayer !== cardOwner) {
+            if (isRevealedCard) {
+              alert(`这是${playerNames[cardOwner]}的明牌，只有${playerNames[cardOwner]}可以选择！请切换到"${playerNames[cardOwner]}"来出牌。`);
+            } else {
+              alert(`这是${playerNames[cardOwner]}的暗牌，任何人都不能选择。`);
+            }
           }
         } else if (!cardOwner && selectedPlayer === 'bottom') {
-          alert(`我只能选择自己的明牌，不能选择公共牌库的牌。`);
+          alert(`我只能选择自己的手牌，不能选择公共牌库的牌。`);
         }
       }
       return;
     }
-    
+
     // 手牌输入模式和游戏模式都使用相同的多选逻辑
     // 如果已经有选中的卡牌，或者已经在多选模式，则使用多选
     if (selectedCards.size > 0 || isMultiSelectMode) {
@@ -604,16 +588,16 @@ const App: React.FC = () => {
     if (e?.ctrlKey || e?.metaKey) {
       return;
     }
-    
+
     // 检查卡牌是否可选择
     if (!isCardSelectable(cardId)) {
       return;
     }
-    
+
     e?.preventDefault();
     e?.stopPropagation();
     setIsDragging(true);
-    
+
     // 开始拖拽时，直接添加当前卡牌到选择中（不清空之前的选择）
     setSelectedCards(prev => {
       const newSelected = new Set(prev);
@@ -646,17 +630,22 @@ const App: React.FC = () => {
   const startHandInput = () => {
     setGameState(prev => ({
       ...prev,
-      phase: 'input'
+      status: GameStatus.INPUT,
     }));
 
     setHandInput(prev => ({
       ...prev,
       isInputMode: true,
-              selectedPlayerForInput: 'bottom' // 默认选择我
+      selectedPlayerForInput: 'bottom' // 默认选择我
     }));
   };
 
   const exitHandInput = () => {
+    setGameState(prev => ({
+      ...prev,
+      status: GameStatus.WAITING, // 返回等待状态
+    }));
+
     setHandInput(prev => ({
       ...prev,
       isInputMode: false,
@@ -669,11 +658,11 @@ const App: React.FC = () => {
     console.log('startGame called');
     console.log('底家手牌数量:', handInput.playerHands.bottom.length);
     console.log('底家手牌:', handInput.playerHands.bottom);
-    
+
     // 启动AI记录
     startRecording();
     console.log('AI记录已启动');
-    
+
     // 检查是否所有玩家都已设置手牌
     const bottomHasCards = handInput.playerHands.bottom.length > 0;
     const otherPlayersReady = ['left', 'top', 'right'].every(pos => {
@@ -692,12 +681,12 @@ const App: React.FC = () => {
     console.log('开始游戏...');
 
     // 更新游戏状态
-    setGameState({
-      phase: 'playing',
-      round: 1,
-      startTime: Date.now(),
-      totalPlays: 0
-    });
+    setGameState(prev => ({
+      ...prev,
+      status: GameStatus.PLAYING,
+      currentRound: { ...prev.currentRound, startTime: Date.now() },
+      updatedAt: Date.now(),
+    }));
 
     setHandInput(prev => ({
       ...prev,
@@ -712,12 +701,12 @@ const App: React.FC = () => {
   // 返回手牌输入
   const backToHandInput = () => {
     // 更新游戏状态
-    setGameState({
-      phase: 'input',
-      round: 1,
-      startTime: null,
-      totalPlays: 0
-    });
+    setGameState(prev => ({
+      ...prev,
+      status: GameStatus.INPUT,
+      currentRound: { ...prev.currentRound, startTime: null },
+      updatedAt: Date.now(),
+    }));
 
     setHandInput(prev => ({
       ...prev,
@@ -725,35 +714,58 @@ const App: React.FC = () => {
       isInputMode: true,
       currentRevealedPlayer: null
     }));
-    
+
     // 清空已出牌记录
-    setPlayedCards({});
-    setPlayHistory([]);
+    setGameState(prev => ({
+      ...prev,
+      allCards: prev.allCards.map(card => ({ ...card, isPlayed: false })), // 重置所有卡牌为未出状态
+      playHistory: [],
+      currentRound: { ...prev.currentRound, passCount: 0, currentMaxPlay: undefined },
+      updatedAt: Date.now(),
+    }));
     setSelectedCards(new Set());
-    
+
     // 重置玩家排名
-    setPlayerRankings({
-      bottom: null,
-      left: null,
-      top: null,
-      right: null
-    });
-    
-    // 重置回合状态
-    setRoundState({
-      lastActivePlayer: null,
-      passCount: 0,
-      roundInProgress: false
-    });
+    setGameState(prev => ({
+      ...prev,
+      players: prev.players.map(p => ({ ...p, stats: { ...p.stats, roundWins: 0 } })), // 重置玩家胜利次数
+      updatedAt: Date.now(),
+    }));
   };
 
   // 重新开始游戏
   const restartGame = () => {
-    setGameState({
-      phase: 'setup',
-      round: 1,
-      startTime: null,
-      totalPlays: 0
+    setGameState(() => {
+      const initialRank: GameRank = 7;
+      const initialPlayers: Player[] = [
+        { id: 'p1', name: '我', position: 'bottom', team: 1, cards: [], remainingCount: 27, isCurrentPlayer: true, stats: { playedCards: 0, rankCardCount: 0, wildCardCount: 0, roundWins: 0 } },
+        { id: 'p2', name: '对手一', position: 'left', team: 2, cards: [], remainingCount: 27, isCurrentPlayer: false, stats: { playedCards: 0, rankCardCount: 0, wildCardCount: 0, roundWins: 0 } },
+        { id: 'p3', name: '队友', position: 'top', team: 1, cards: [], remainingCount: 27, isCurrentPlayer: false, stats: { playedCards: 0, rankCardCount: 0, wildCardCount: 0, roundWins: 0 } },
+        { id: 'p4', name: '对手二', position: 'right', team: 2, cards: [], remainingCount: 27, isCurrentPlayer: false, stats: { playedCards: 0, rankCardCount: 0, wildCardCount: 0, roundWins: 0 } },
+      ];
+
+      const initialCards = generateSortedCards(initialRank);
+
+      return {
+        gameId: `game-${Date.now()}`,
+        status: GameStatus.WAITING,
+        config: {
+          rank: { current: initialRank, next: initialRank, history: [] },
+          tributeEnabled: false,
+        },
+        players: initialPlayers,
+        currentPlayerPosition: 'bottom',
+        allCards: initialCards.map(card => ({ ...card, isPlayed: false, isSelected: false, isRankCard: false, isWildCard: false, timestamp: Date.now() })),
+        playHistory: [],
+        currentRound: {
+          roundNumber: 1,
+          startTime: null,
+          passCount: 0,
+          isFinished: false,
+        },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
     });
 
     setHandInput({
@@ -775,26 +787,7 @@ const App: React.FC = () => {
       currentRevealedPlayer: null
     });
 
-    // 清空所有游戏数据
-    setPlayedCards({});
-    setPlayHistory([]);
     setSelectedCards(new Set());
-    setSelectedPlayer('bottom');
-    
-    // 重置玩家排名
-    setPlayerRankings({
-      bottom: null,
-      left: null,
-      top: null,
-      right: null
-    });
-    
-    // 重置回合状态
-    setRoundState({
-      lastActivePlayer: null,
-      passCount: 0,
-      roundInProgress: false
-    });
   };
 
   const selectPlayerForInput = (player: PlayerPosition) => {
@@ -806,33 +799,33 @@ const App: React.FC = () => {
 
 
   // 切换明牌状态
-  const toggleRevealedCard = (cardId: string, player: PlayerPosition) => {
-    const isRevealed = handInput.revealedCards[player].includes(cardId);
-    const hasCard = handInput.playerHands[player].some(card => card.id === cardId);
-    
+  const toggleRevealedCard = (cardId: string, playerPos: PlayerPosition) => {
+    const isRevealed = handInput.revealedCards[playerPos].includes(cardId);
+    const hasCard = handInput.playerHands[playerPos].some((card: Card) => card.id === cardId);
+
     if (!hasCard) return; // 只能标记已在手牌中的卡牌
-    
+
     setHandInput(prev => {
-      const currentRevealed = prev.revealedCards[player];
-      
+      const currentRevealed = prev.revealedCards[playerPos];
+
       if (isRevealed) {
         // 移除明牌标记
         return {
           ...prev,
           revealedCards: {
             ...prev.revealedCards,
-            [player]: currentRevealed.filter(id => id !== cardId)
+            [playerPos]: currentRevealed.filter(id => id !== cardId)
           }
         };
       } else {
         // 添加明牌标记
-        if (player === 'bottom') {
+        if (playerPos === 'bottom') {
           // 我可以标记多张明牌
           return {
             ...prev,
             revealedCards: {
               ...prev.revealedCards,
-              [player]: [...currentRevealed, cardId]
+              [playerPos]: [...currentRevealed, cardId]
             }
           };
         } else {
@@ -841,7 +834,7 @@ const App: React.FC = () => {
             ...prev,
             revealedCards: {
               ...prev.revealedCards,
-              [player]: [cardId]
+              [playerPos]: [cardId]
             }
           };
         }
@@ -849,33 +842,50 @@ const App: React.FC = () => {
     });
   };
 
+  // 玩家切换时记录过牌
+  const switchToNextPlayer = (currentPlayer: PlayerPosition, isManualSwitch: boolean = false) => {
+    // 如果是手动切换且游戏已开始，记录当前玩家过牌
+    if (isManualSwitch && (gameState.status === GameStatus.PLAYING || gameState.status === GameStatus.FINISHED) && isRecording) {
+      recordPass(currentPlayer);
+      console.log(`${currentPlayer} 过牌 (手动切换)`);
+    }
+
+    // 获取下一个玩家
+    const nextPlayer = getNextPlayer(currentPlayer);
+    setGameState(prev => ({
+      ...prev,
+      currentPlayerPosition: nextPlayer,
+      updatedAt: Date.now(),
+    }));
+  };
+
   // 获取下一个玩家（按掼蛋规则：我→下家→对家→上家）
   const getNextPlayer = (currentPlayer: PlayerPosition): PlayerPosition => {
     // 掼蛋出牌顺序：我(bottom) → 下家(left) → 对家(top) → 上家(right)
     const playerOrder: PlayerPosition[] = ['bottom', 'left', 'top', 'right'];
     const currentIndex = playerOrder.indexOf(currentPlayer);
-    
+
     // 如果游戏开始了，需要检查玩家是否已出完牌（只考虑胜利状态，不考虑手牌设置）
-    if (handInput.gameStarted) {
+    if (gameState.status === GameStatus.PLAYING || gameState.status === GameStatus.FINISHED) {
       const { winners } = checkGameEnd();
-      
+
       // 寻找下一个未出完牌的玩家
       for (let i = 1; i <= playerOrder.length; i++) {
         const nextIndex = (currentIndex + i) % playerOrder.length;
         const nextPlayer = playerOrder[nextIndex];
-        
+
         // 只检查玩家是否已经获胜（出完所有牌），不检查手牌设置
         const isFinished = winners.includes(nextPlayer);
-        
+
         if (!isFinished) {
           return nextPlayer;
         }
       }
-      
+
       // 如果所有玩家都出完了，返回当前玩家
       return currentPlayer;
     }
-    
+
     // 游戏未开始时使用普通逻辑
     const nextIndex = (currentIndex + 1) % playerOrder.length;
     return playerOrder[nextIndex];
@@ -884,45 +894,45 @@ const App: React.FC = () => {
   // 确认出牌
   const handlePlayCards = () => {
     if (selectedCards.size === 0) return;
-    
+
     // 手牌输入模式：将选中的卡牌添加到当前玩家的手牌
     if (handInput.isInputMode && handInput.selectedPlayerForInput) {
       const selectedCardIds = Array.from(selectedCards);
-      const player = handInput.selectedPlayerForInput;
-      const currentCards = handInput.playerHands[player];
-      
+      const playerPos = handInput.selectedPlayerForInput;
+      const currentCards = handInput.playerHands[playerPos];
+
       // 检查数量限制
       let maxCards = 27;
-      if (player !== 'bottom') {
+      if (playerPos !== 'bottom') {
         maxCards = 1;
       }
-      
+
       if (currentCards.length + selectedCardIds.length > maxCards) {
-        alert(`${player === 'bottom' ? '我' : player === 'left' ? '对手一' : player === 'top' ? '队友' : '对手二'}最多只能设置${maxCards}张明牌！`);
+        alert(`${playerPos === 'bottom' ? '我' : playerPos === 'left' ? '对手一' : playerPos === 'top' ? '队友' : '对手二'}最多只能设置${maxCards}张明牌！`);
         return;
       }
-      
+
       // 添加选中的卡牌到玩家手牌和明牌列表
-      const selectedCardObjects = cards.filter(card => selectedCards.has(card.id));
+      const selectedCardObjects = allCards.filter(card => selectedCards.has(card.id));
       const newSelectedCardIds = selectedCardObjects.map(card => card.id);
       setHandInput(prev => ({
         ...prev,
         playerHands: {
           ...prev.playerHands,
-          [player]: [...currentCards, ...selectedCardObjects]
+          [playerPos]: [...currentCards, ...selectedCardObjects]
         },
         revealedCards: {
           ...prev.revealedCards,
-          [player]: [...prev.revealedCards[player], ...newSelectedCardIds]
+          [playerPos]: [...prev.revealedCards[playerPos], ...newSelectedCardIds]
         }
       }));
-      
+
       // 清空选择
       setSelectedCards(new Set());
       resetMultiSelectMode();
-      
+
       // 如果完成我的明牌设置，自动切换到下一个玩家
-      if (player === 'bottom') {
+      if (playerPos === 'bottom') {
         // 切换到对手一设置明牌
         setHandInput(prev => ({
           ...prev,
@@ -935,103 +945,68 @@ const App: React.FC = () => {
           selectedPlayerForInput: null
         }));
       }
-      
+
       return;
     }
-    
+
     // 游戏模式：正常出牌逻辑
     // 获取选中的卡牌对象
-    const selectedCardObjects = cards.filter(card => selectedCards.has(card.id));
-    
+    const selectedCardObjects = allCards.filter(card => selectedCards.has(card.id));
+
     // 验证牌型
     const validation = validateCardType(selectedCardObjects, currentRank);
-    
+
     if (!validation.isValid) {
       alert(`出牌错误：${validation.description}`);
       return;
     }
-    
-    // 记录出牌历史
-    const playRecord = {
-      player: selectedPlayer,
-      cardIds: Array.from(selectedCards),
-      timestamp: Date.now()
-    };
-    
-    setPlayHistory(prev => [...prev, playRecord]);
-    
-    // AI系统记录出牌（连接AI分析）
-    if (handInput.gameStarted && isRecording) {
-      const remainingCardsCount = 27 - Object.entries(playedCards).filter(([, player]) => player === selectedPlayer).length;
-      
-      // 将验证类型映射到AI系统的PlayType
-      const mapValidationTypeToPlayType = (validationType: string) => {
-        const typeMap: Record<string, any> = {
-          'single': 'single',
-          'pair': 'pair',
-          'triple': 'triple',
-          'triple_with_pair': 'triple_with_pair',
-          'airplane': 'plane',
-          'consecutive_pairs': 'pair_straight',
-          'wooden_board': 'triple_straight',
-          'steel_board': 'bomb_four',
-          'straight': 'straight',
-          'flush_straight': 'straight_flush',
-          'bomb': 'bomb_four',
-          'four_kings': 'bomb_four'
-        };
-        return typeMap[validationType] || 'single';
-      };
-      
-      // 转换Card对象以匹配AI系统类型
-      const aiCards = selectedCardObjects.map(card => ({
-        ...card,
-        isPlayed: false,
-        isSelected: false,
-        timestamp: Date.now(),
-        suit: card.suit as any,
-        rank: card.rank as any
-      }));
-      
-      recordPlay({
-        playerPosition: selectedPlayer,
-        cards: aiCards,
-        type: mapValidationTypeToPlayType(validation.type || 'single'),
-        cardsBeforePlay: remainingCardsCount,
-        isActivePlay: true,
-        description: `${selectedPlayer} 出了${selectedCardObjects.length}张牌 (${validation.description})`
-      });
-    }
-    
-    // 将卡牌标记为已出
-    const newPlayedCards = { ...playedCards };
-    selectedCards.forEach(cardId => {
-      newPlayedCards[cardId] = selectedPlayer;
-    });
-    setPlayedCards(newPlayedCards);
 
-    // 只有在游戏进行中才更新游戏统计（不在手牌输入时统计）
-    if (handInput.gameStarted) {
-      setGameState(prev => ({
-        ...prev,
-        totalPlays: prev.totalPlays + 1
-      }));
-      console.log(`实际出牌统计更新: 第${gameState.totalPlays + 1}次出牌`);
+    // 记录出牌历史 (更新gameState中的playHistory)
+    const newPlayRecord: PlayRecord = {
+      id: `play-${Date.now()}`,
+      playerPosition: selectedPlayer,
+      cards: selectedCardObjects,
+      type: validation.type as PlayType || PlayType.SINGLE, // 确保类型匹配
+      timestamp: Date.now(),
+      isActivePlay: true,
+      description: `${selectedPlayer} 出了${selectedCardObjects.length}张牌 (${validation.description})`
+    };
+
+    setGameState(prev => ({
+      ...prev,
+      playHistory: [...prev.playHistory, newPlayRecord],
+      allCards: prev.allCards.map(card =>
+        selectedCards.has(card.id) ? { ...card, isPlayed: true } : card
+      ),
+      players: prev.players.map(player => {
+        if (player.position === selectedPlayer) {
+          return {
+            ...player,
+            remainingCount: player.remainingCount - selectedCardObjects.length,
+            stats: { ...player.stats, playedCards: player.stats.playedCards + selectedCardObjects.length }
+          };
+        }
+        return player;
+      }),
+      currentRound: { ...prev.currentRound, currentMaxPlay: newPlayRecord, passCount: 0 },
+      updatedAt: Date.now(),
+    }));
+
+    // AI系统记录出牌（连接AI分析）
+    if (gameState.status === GameStatus.PLAYING && isRecording) {
+      recordPlay(newPlayRecord);
     }
-    
+
     // 直接完成出牌，不显示成功提示
     setSelectedCards(new Set());
     resetMultiSelectMode();
-    
-    // 更新回合状态 - 有人出牌了
-    setRoundState({
-      lastActivePlayer: selectedPlayer,
-      passCount: 0, // 重置过牌计数
-      roundInProgress: true
-    });
 
-    // 自动切换到下一个玩家
-    setSelectedPlayer(getNextPlayer(selectedPlayer));
+    // 自动切换到下一个玩家（出牌后不算过牌）
+    setGameState(prev => ({
+      ...prev,
+      currentPlayerPosition: getNextPlayer(selectedPlayer),
+      updatedAt: Date.now(),
+    }));
   };
 
   // 取消选择
@@ -1045,154 +1020,137 @@ const App: React.FC = () => {
     if (playHistory.length === 0) {
       return; // 没有可撤销的出牌时静默返回
     }
-    
-    const lastPlay = playHistory[playHistory.length - 1];
-    
-    // 移除已出牌记录
-    const newPlayedCards = { ...playedCards };
-    lastPlay.cardIds.forEach(cardId => {
-      delete newPlayedCards[cardId];
-    });
-    setPlayedCards(newPlayedCards);
-    
-    // 移除历史记录
-    setPlayHistory(prev => prev.slice(0, -1));
 
-    // 只有在游戏进行中才更新游戏统计
-    if (handInput.gameStarted) {
-      setGameState(prev => ({
-        ...prev,
-        totalPlays: Math.max(0, prev.totalPlays - 1)
-      }));
-      console.log(`撤销出牌统计更新: 减少到${Math.max(0, gameState.totalPlays - 1)}次出牌`);
-    }
-    
+    const lastPlay = playHistory[playHistory.length - 1];
+
+    // 移除已出牌记录 (更新gameState中的allCards)
+    setGameState(prev => ({
+      ...prev,
+      allCards: prev.allCards.map(card =>
+        lastPlay.cards.some(lc => lc.id === card.id) ? { ...card, isPlayed: false } : card
+      ),
+      players: prev.players.map(player => {
+        if (player.position === lastPlay.playerPosition) {
+          return {
+            ...player,
+            remainingCount: player.remainingCount + lastPlay.cards.length,
+            stats: { ...player.stats, playedCards: player.stats.playedCards - lastPlay.cards.length }
+          };
+        }
+        return player;
+      }),
+      playHistory: prev.playHistory.slice(0, -1),
+      currentRound: { ...prev.currentRound, currentMaxPlay: playHistory.length > 1 ? playHistory[playHistory.length - 2] : undefined },
+      updatedAt: Date.now(),
+    }));
+
     // 直接完成撤销，不显示提示
   };
 
   // 计算游戏时长
   const getGameDuration = (): string => {
-    if (!gameState.startTime) return '00:00';
-    
-    const duration = Date.now() - gameState.startTime;
+    if (!gameState.currentRound.startTime) return '00:00';
+
+    const duration = Date.now() - gameState.currentRound.startTime;
     const minutes = Math.floor(duration / 60000);
     const seconds = Math.floor((duration % 60000) / 1000);
-    
+
     return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
   };
 
   // 计算剩余卡牌数
   const getRemainingCards = (): number => {
-    return cards.length - Object.keys(playedCards).length;
+    return allCards.filter(card => !card.isPlayed).length;
   };
-
-  // 玩家排名状态 - 记录完成顺序
-  const [playerRankings, setPlayerRankings] = useState<Record<PlayerPosition, number | null>>({
-    bottom: null,
-    left: null,
-    top: null,
-    right: null
-  });
-
-  // 回合管理状态
-  const [roundState, setRoundState] = useState<{
-    lastActivePlayer: PlayerPosition | null; // 最后一个出牌的玩家
-    passCount: number; // 连续过牌次数
-    roundInProgress: boolean; // 是否有回合进行中
-  }>({
-    lastActivePlayer: null,
-    passCount: 0,
-    roundInProgress: false
-  });
 
   // 检查游戏是否结束以及获胜玩家
   const checkGameEnd = (): { isGameEnd: boolean; winners: PlayerPosition[]; winningTeam?: number } => {
-    if (!handInput.gameStarted) return { isGameEnd: false, winners: [] };
-    
+    if (gameState.status !== GameStatus.PLAYING && gameState.status !== GameStatus.FINISHED) return { isGameEnd: false, winners: [] };
+
     const winners: PlayerPosition[] = [];
     const finishedPlayers: { player: PlayerPosition; finishTime: number }[] = [];
-    
+
     // 掼蛋规则：每个玩家有27张牌
     const TOTAL_CARDS_PER_PLAYER = 27;
-    
+
     // 检查每个玩家是否出完所有27张牌，并记录完成时间
-    (['bottom', 'left', 'top', 'right'] as PlayerPosition[]).forEach(player => {
-      const playerPlayedCards = Object.entries(playedCards)
-        .filter(([, cardPlayer]) => cardPlayer === player)
-        .map(([cardId]) => cardId);
-      
+    players.forEach(player => {
+      const playerPlayedCardsCount = allCards.filter(card => card.isPlayed && player.cards.some(pc => pc.id === card.id)).length;
+
       // 玩家需要出完所有27张牌才算胜利
-      if (playerPlayedCards.length >= TOTAL_CARDS_PER_PLAYER) {
-        winners.push(player);
-        
+      if (playerPlayedCardsCount >= TOTAL_CARDS_PER_PLAYER) {
+        winners.push(player.position);
+
         // 如果这个玩家还没有排名，分配排名
-        if (playerRankings[player] === null) {
-          const existingRanks = Object.values(playerRankings).filter(rank => rank !== null);
+        if (player.stats.roundWins === 0) { // 简化：用roundWins作为是否已排名的标志
+          const existingRanks = players.filter(p => p.stats.roundWins > 0).map(p => p.stats.roundWins);
           const nextRank = existingRanks.length + 1;
           if (nextRank <= 3) { // 只记录前三名
-            setPlayerRankings(prev => ({
+            setGameState(prev => ({
               ...prev,
-              [player]: nextRank
+              players: prev.players.map(p => p.id === player.id ? { ...p, stats: { ...p.stats, roundWins: nextRank } } : p),
+              updatedAt: Date.now(),
             }));
-            
+
             // 记录完成时间（用排名序号作为完成时间）
-            finishedPlayers.push({ player, finishTime: nextRank });
+            finishedPlayers.push({ player: player.position, finishTime: nextRank });
           }
         } else {
           // 已有排名，直接添加到完成列表
-          finishedPlayers.push({ player, finishTime: playerRankings[player]! });
+          finishedPlayers.push({ player: player.position, finishTime: player.stats.roundWins });
         }
       }
     });
-    
+
     // 按完成时间排序
     finishedPlayers.sort((a, b) => a.finishTime - b.finishTime);
-    
+
     // 检查团队胜利条件：同一队伍的两个玩家成为头游、二游
     if (finishedPlayers.length >= 2) {
       const firstPlace = finishedPlayers[0].player;  // 头游
       const secondPlace = finishedPlayers[1].player; // 二游
-      
+
       // 团队1：我(bottom) + 队友(top)
       // 团队2：对手一(left) + 对手二(right)
       const team1Players = ['bottom', 'top'];
       const team2Players = ['left', 'right'];
-      
+
       const team1Won = team1Players.includes(firstPlace) && team1Players.includes(secondPlace);
       const team2Won = team2Players.includes(firstPlace) && team2Players.includes(secondPlace);
-      
+
       if (team1Won) {
         return { isGameEnd: true, winners, winningTeam: 1 };
       } else if (team2Won) {
         return { isGameEnd: true, winners, winningTeam: 2 };
       }
     }
-    
+
     // 如果没有团队胜利，检查传统结束条件：至少有3个玩家出完所有27张牌
     const isGameEnd = finishedPlayers.length >= 3;
-    
+
     return { isGameEnd, winners };
   };
 
   // 游戏结束处理
-  React.useEffect(() => {
-    if (gameState.phase === 'playing') {
+  useEffect(() => {
+    if (gameState.status === GameStatus.PLAYING) {
       const { isGameEnd, winners, winningTeam } = checkGameEnd();
       if (isGameEnd) {
         setGameState(prev => ({
           ...prev,
-          phase: 'finished'
+          status: GameStatus.FINISHED,
+          updatedAt: Date.now(),
         }));
-        
+
         const playerNames = {
           bottom: '我',
           left: '对手一',
           top: '队友',
           right: '对手二'
         };
-        
+
         let gameEndMessage = '🎉 游戏结束！\n';
-        
+
         if (winningTeam) {
           // 团队胜利
           if (winningTeam === 1) {
@@ -1207,13 +1165,13 @@ const App: React.FC = () => {
           const winnerNames = winners.map(player => playerNames[player]).join('、');
           gameEndMessage += `出完玩家: ${winnerNames}\n`;
         }
-        
-        gameEndMessage += `游戏时长: ${getGameDuration()}\n总出牌次数: ${gameState.totalPlays}`;
-        
+
+        gameEndMessage += `游戏时长: ${getGameDuration()}\n总出牌次数: ${playHistory.length}`;
+
         alert(gameEndMessage);
       }
     }
-  }, [playedCards, gameState.phase, gameState.totalPlays, getGameDuration]);
+  }, [gameState.status, playHistory.length, getGameDuration, allCards, players]);
 
   // 不需要分组，直接竖向排列
 
@@ -1224,45 +1182,49 @@ const App: React.FC = () => {
         <div className="flex items-center justify-between max-w-6xl mx-auto">
           <div className="flex items-center space-x-4">
             <h1 className="text-xl font-bold text-gray-800">掼蛋记牌器</h1>
-            
+
             {/* 游戏状态信息 */}
-            {(gameState.phase === 'playing' || gameState.phase === 'finished') && (
+            {(gameState.status === GameStatus.PLAYING || gameState.status === GameStatus.FINISHED) && (
               <div className="flex items-center space-x-3 text-sm">
                 <div className={`px-2 py-1 rounded ${
-                  gameState.phase === 'finished' 
-                    ? 'bg-yellow-100 text-yellow-700' 
+                  gameState.status === GameStatus.FINISHED
+                    ? 'bg-yellow-100 text-yellow-700'
                     : 'bg-green-100 text-green-700'
                 }`}>
-                  {gameState.phase === 'finished' ? 
+                  {gameState.status === GameStatus.FINISHED ?
                     (() => {
                       const { winningTeam } = checkGameEnd();
                       if (winningTeam === 1) return '🏆 我队胜利';
                       if (winningTeam === 2) return '😔 对手胜利';
                       return '🏆 游戏结束';
-                    })() : 
-                    '🎮 第' + gameState.round + '局'
+                    })() :
+                    '🎮 第' + gameState.currentRound.roundNumber + '局'
                   }
                 </div>
                 <div className="bg-blue-100 text-blue-700 px-2 py-1 rounded">
                   ⏱️ {getGameDuration()}
                 </div>
                 <div className="bg-purple-100 text-purple-700 px-2 py-1 rounded">
-                  📊 {gameState.totalPlays}次出牌
+                  📊 {playHistory.length}次出牌
                 </div>
                 <div className="bg-orange-100 text-orange-700 px-2 py-1 rounded">
                   🃏 {getRemainingCards()}张剩余
                 </div>
               </div>
             )}
-            
+
             {/* 级数选择 */}
             <div className="flex items-center space-x-2 bg-white rounded-lg p-2 shadow-sm">
               <span className="text-sm font-medium text-gray-700">级数:</span>
               <select
                 value={currentRank}
-                onChange={(e) => setCurrentRank(parseInt(e.target.value) as GameRank)}
+                onChange={(e) => setGameState(prev => ({
+                  ...prev,
+                  config: { ...prev.config, rank: { ...prev.config.rank, current: parseInt(e.target.value) as GameRank } },
+                  updatedAt: Date.now(),
+                }))}
                 className="bg-blue-50 border border-blue-200 rounded px-3 py-1 text-sm font-medium text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                disabled={gameState.phase === 'playing'}
+                disabled={gameState.status === GameStatus.PLAYING}
               >
                 {([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] as GameRank[]).map(rank => (
                   <option key={rank} value={rank}>
@@ -1272,10 +1234,10 @@ const App: React.FC = () => {
               </select>
             </div>
           </div>
-          
+
           <div className="flex items-center space-x-2">
-            {handInput.gameStarted ? (
-              // 游戏进行中
+            {gameState.status === GameStatus.PLAYING || gameState.status === GameStatus.FINISHED ? (
+              // 游戏进行中或已结束
               <div className="flex items-center space-x-2">
                 <button
                   onClick={backToHandInput}
@@ -1291,15 +1253,7 @@ const App: React.FC = () => {
                   🔄 重新开始
                 </button>
               </div>
-            ) : !handInput.isInputMode ? (
-              // 正常模式
-              <button
-                onClick={startHandInput}
-                className="px-3 py-2 bg-orange-500 text-white rounded text-sm hover:bg-orange-600 transition-colors"
-              >
-                🃏 手牌输入
-              </button>
-            ) : (
+            ) : gameState.status === GameStatus.INPUT ? (
               // 手牌输入模式
               <div className="flex items-center space-x-2">
                 <button
@@ -1321,8 +1275,37 @@ const App: React.FC = () => {
                   ← 退出输入
                 </button>
               </div>
+            ) : (
+              // 初始等待模式
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => {
+                    // 直接开始游戏，跳过手牌输入
+                    startRecording();
+                    setGameState(prev => ({
+                      ...prev,
+                      status: GameStatus.PLAYING,
+                      currentRound: {
+                        roundNumber: 1,
+                        startTime: Date.now(),
+                        endTime: null,
+                        plays: []
+                      }
+                    }));
+                  }}
+                  className="px-3 py-2 bg-green-500 text-white rounded text-sm hover:bg-green-600 transition-colors"
+                >
+                  🎮 开始游戏
+                </button>
+                <button
+                  onClick={startHandInput}
+                  className="px-3 py-2 bg-orange-500 text-white rounded text-sm hover:bg-orange-600 transition-colors"
+                >
+                  🃏 手牌输入
+                </button>
+              </div>
             )}
-            
+
             {/* 历史游戏按钮 */}
             <button
               onClick={() => setShowGameHistory(true)}
@@ -1331,7 +1314,7 @@ const App: React.FC = () => {
             >
               📂 历史
             </button>
-            
+
             {/* 回放按钮 */}
             <button
               onClick={() => {
@@ -1344,20 +1327,20 @@ const App: React.FC = () => {
             >
               🎬 回放
             </button>
-            
+
             {/* AI助手切换按钮 */}
             <button
               onClick={() => setShowAIAssistant(!showAIAssistant)}
               className={`px-3 py-2 rounded text-sm transition-colors ${
-                showAIAssistant 
-                  ? 'bg-blue-500 text-white hover:bg-blue-600' 
+                showAIAssistant
+                  ? 'bg-blue-500 text-white hover:bg-blue-600'
                   : 'bg-gray-300 text-gray-700 hover:bg-gray-400'
               }`}
               title="AI智能助手"
             >
               🤖 AI助手
             </button>
-            
+
             <button
               onClick={() => setShowSettings(true)}
               className="p-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded transition-colors"
@@ -1375,9 +1358,9 @@ const App: React.FC = () => {
         <div className="space-y-4">
           {/* 玩家信息区域 */}
           <div className="grid grid-cols-4 gap-2">
-            {(['bottom', 'left', 'top', 'right'] as PlayerPosition[]).map(position => {
-              const isSelected = handInput.isInputMode ? handInput.selectedPlayerForInput === position : selectedPlayer === position;
-              const playerStats = getPlayerCardStats(position);
+            {players.map(player => {
+              const isSelected = handInput.isInputMode ? handInput.selectedPlayerForInput === player.position : selectedPlayer === player.position;
+              const playerStats = getPlayerCardStats(player.position);
               const playerNames = {
                 bottom: '我',
                 left: '对手一',
@@ -1394,33 +1377,33 @@ const App: React.FC = () => {
 
               // 检查玩家是否已胜利
               const { winners } = checkGameEnd();
-              const isWinner = winners.includes(position);
-              
+              const isWinner = winners.includes(player.position);
+
               // 获取玩家排名
-              const playerRank = playerRankings[position];
+              const playerRank = player.stats.roundWins; // 使用roundWins作为排名
               const rankLabels = {
                 1: '头游',
-                2: '二游', 
+                2: '二游',
                 3: '三游'
               };
 
               return (
                 <div
-                  key={position}
+                  key={player.id}
                   className={`relative p-2 rounded-lg cursor-pointer transition-all ${
-                    isSelected 
-                      ? 'bg-gradient-to-r from-blue-50 to-blue-100 border-2 border-blue-500 shadow-md' 
+                    isSelected
+                      ? 'bg-gradient-to-r from-blue-50 to-blue-100 border-2 border-blue-500 shadow-md'
                       : 'bg-white border border-gray-200 hover:border-gray-300 shadow-sm hover:shadow-md'
                   }`}
                   onClick={() => {
                     if (handInput.isInputMode) {
-                      selectPlayerForInput(position);
+                      selectPlayerForInput(player.position);
                     } else {
-                      setSelectedPlayer(position);
+                      setGameState(prev => ({ ...prev, currentPlayerPosition: player.position, updatedAt: Date.now() }));
                     }
                   }}
                   style={{
-                    borderColor: isSelected ? '#3b82f6' : playerColors[position],
+                    borderColor: isSelected ? '#3b82f6' : playerColors[player.position],
                     borderWidth: isSelected ? '2px' : '1px'
                   }}
                 >
@@ -1433,17 +1416,17 @@ const App: React.FC = () => {
 
                   {/* 玩家颜色标识和位置标注 */}
                   <div className="absolute top-1 right-1 flex flex-col items-end">
-                    <div 
+                    <div
                       className="w-2 h-2 rounded-full mb-1"
-                      style={{ backgroundColor: playerColors[position] }}
+                      style={{ backgroundColor: playerColors[player.position] }}
                     />
                     <div className="text-xs text-gray-500 font-medium">
-                      {playerPositionLabels[position]}
+                      {playerPositionLabels[player.position]}
                     </div>
                   </div>
-                  
+
                   <div className={`font-medium text-sm mb-1 ${isWinner ? 'text-yellow-600' : 'text-gray-800'}`}>
-                    {playerNames[position]}
+                    {playerNames[player.position]}
                     {playerRank && (
                       <span className={`ml-1 px-1 py-0.5 rounded text-xs font-bold ${
                         playerRank === 1 ? 'bg-yellow-100 text-yellow-800' :
@@ -1457,7 +1440,7 @@ const App: React.FC = () => {
                   </div>
                   {handInput.isInputMode ? (
                     // 手牌输入模式显示
-                    position === 'bottom' ? (
+                    player.position === 'bottom' ? (
                       // 我显示：已设置的明牌数
                       <div className="grid grid-cols-2 gap-1 text-xs">
                         <div className="text-center">
@@ -1516,9 +1499,9 @@ const App: React.FC = () => {
                 🔄 撤销选牌 ({selectedCards.size}张)
               </button>
             )}
-            
+
             {/* 撤销出牌按钮 */}
-            {playHistory.length > 0 && !handInput.isInputMode && (
+            {playHistory.length > 0 && gameState.status !== GameStatus.INPUT && (
               <button
                 onClick={handleUndo}
                 className="px-3 py-1 bg-orange-500 text-white rounded text-sm hover:bg-orange-600 transition-colors"
@@ -1526,9 +1509,9 @@ const App: React.FC = () => {
                 ↶ 撤销出牌 ({playHistory.length}次可撤销)
               </button>
             )}
-            
+
             {/* 手牌输入模式的撤销按钮 */}
-            {handInput.isInputMode && handInput.selectedPlayerForInput && 
+            {handInput.isInputMode && handInput.selectedPlayerForInput &&
              handInput.playerHands[handInput.selectedPlayerForInput].length > 0 && (
               <button
                 onClick={() => {
@@ -1539,7 +1522,7 @@ const App: React.FC = () => {
                       ...prev,
                       playerHands: {
                         ...prev.playerHands,
-                        [currentPlayer]: prev.playerHands[currentPlayer].slice(0, -1)
+                        [currentPlayer]: prev.playerHands[currentPlayer].filter((card: Card) => card.id !== lastCard.id)
                       },
                       revealedCards: {
                         ...prev.revealedCards,
@@ -1556,16 +1539,16 @@ const App: React.FC = () => {
           </div>
 
           {/* 当前玩家提示和切换按钮 */}
-          {handInput.gameStarted ? (
+          {gameState.status === GameStatus.PLAYING || gameState.status === GameStatus.FINISHED ? (
             // 游戏进行中：显示当前玩家和明牌权限提示
             <div className="text-center">
               <div className="flex items-center justify-center space-x-3">
                 <button
-                  onClick={() => setSelectedPlayer(getNextPlayer(selectedPlayer))}
+                  onClick={() => switchToNextPlayer(selectedPlayer, true)}
                   className="px-2 py-1 bg-gray-500 text-white rounded text-xs hover:bg-gray-600 transition-colors"
-                  title="切换到下一个玩家"
+                  title="切换到下一个玩家(当前玩家过牌)"
                 >
-                  ← 切换
+                  ← 过牌切换
                 </button>
                 <div className="flex flex-col items-center space-y-1">
                   <span className="inline-block bg-green-100 text-green-800 px-3 py-1 rounded-full text-xs font-medium">
@@ -1575,25 +1558,17 @@ const App: React.FC = () => {
                       selectedPlayer === 'top' ? '队友' : '对手二'
                     }
                   </span>
-                  {roundState.roundInProgress && roundState.lastActivePlayer && (
-                    <span className="text-xs text-gray-600">
-                      {roundState.lastActivePlayer === 'bottom' ? '我' :
-                       roundState.lastActivePlayer === 'left' ? '对手一' :
-                       roundState.lastActivePlayer === 'top' ? '队友' : '对手二'} 
-                      出牌 · 已过牌{roundState.passCount}家
-                    </span>
-                  )}
                 </div>
                 <button
-                  onClick={() => setSelectedPlayer(getNextPlayer(selectedPlayer))}
+                  onClick={() => switchToNextPlayer(selectedPlayer, true)}
                   className="px-2 py-1 bg-gray-500 text-white rounded text-xs hover:bg-gray-600 transition-colors"
-                  title="切换到下一个玩家"
+                  title="切换到下一个玩家(当前玩家过牌)"
                 >
-                  切换 →
+                  过牌切换 →
                 </button>
               </div>
             </div>
-          ) : handInput.isInputMode ? (
+          ) : gameState.status === GameStatus.INPUT ? (
             // 手牌输入模式：显示玩家选择提示
             <div className="text-center">
               {handInput.selectedPlayerForInput ? (
@@ -1637,7 +1612,7 @@ const App: React.FC = () => {
                         ✅ 我的明牌已设置完成，可以继续为其他玩家设置明牌或开始游戏
                       </div>
                       <div className="flex items-center justify-center space-x-2">
-                        {['left', 'top', 'right'].filter(player => 
+                        {['left', 'top', 'right'].filter(player =>
                           handInput.playerHands[player as PlayerPosition].length === 0
                         ).length > 0 && (
                           <>
@@ -1678,7 +1653,7 @@ const App: React.FC = () => {
             // 正常模式：显示当前玩家
             <div className="flex items-center justify-center space-x-3">
               <button
-                onClick={() => setSelectedPlayer(getNextPlayer(selectedPlayer))}
+                onClick={() => setGameState(prev => ({ ...prev, currentPlayerPosition: getNextPlayer(selectedPlayer), updatedAt: Date.now() }))}
                 className="px-2 py-1 bg-gray-500 text-white rounded text-xs hover:bg-gray-600 transition-colors"
                 title="切换到下一个玩家"
               >
@@ -1692,7 +1667,7 @@ const App: React.FC = () => {
                 }
               </span>
               <button
-                onClick={() => setSelectedPlayer(getNextPlayer(selectedPlayer))}
+                onClick={() => setGameState(prev => ({ ...prev, currentPlayerPosition: getNextPlayer(selectedPlayer), updatedAt: Date.now() }))}
                 className="px-2 py-1 bg-gray-500 text-white rounded text-xs hover:bg-gray-600 transition-colors"
                 title="切换到下一个玩家"
               >
@@ -1712,8 +1687,8 @@ const App: React.FC = () => {
                       <button
                         onClick={() => setIsMultiSelectMode(!isMultiSelectMode)}
                         className={`px-3 py-1 text-xs rounded transition-colors ${
-                          isMultiSelectMode 
-                            ? 'bg-green-500 text-white hover:bg-green-600' 
+                          isMultiSelectMode
+                            ? 'bg-green-500 text-white hover:bg-green-600'
                             : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
                         }`}
                       >
@@ -1764,47 +1739,10 @@ const App: React.FC = () => {
               </div>
             )}
 
-            {/* 游戏进行中且无选择卡牌时显示过牌按钮 */}
-            {handInput.gameStarted && selectedCards.size === 0 && (
-              <div className="mb-4 flex items-center justify-center bg-orange-50 border border-orange-200 rounded-lg p-3">
-                <button
-                  onClick={() => {
-                    // 记录过牌到AI系统
-                    if (isRecording) {
-                      recordPass(selectedPlayer);
-                    }
-                    
-                    // 更新回合状态 - 有人过牌了
-                    const newPassCount = roundState.passCount + 1;
-                    
-                    // 检查是否三家都过牌了
-                    if (newPassCount >= 3 && roundState.lastActivePlayer) {
-                      // 三家过牌，最后出牌的玩家重新获得出牌权
-                      setRoundState({
-                        lastActivePlayer: null,
-                        passCount: 0,
-                        roundInProgress: false
-                      });
-                      setSelectedPlayer(roundState.lastActivePlayer);
-                    } else {
-                      // 继续过牌，更新状态并切换到下一个玩家
-                      setRoundState(prev => ({
-                        ...prev,
-                        passCount: newPassCount
-                      }));
-                      setSelectedPlayer(getNextPlayer(selectedPlayer));
-                    }
-                  }}
-                  className="px-4 py-2 bg-orange-500 text-white rounded text-sm hover:bg-orange-600 transition-colors"
-                >
-                  🚫 过牌 {roundState.roundInProgress && roundState.passCount > 0 ? `(${roundState.passCount}/3)` : ''}
-                </button>
-              </div>
-            )}
 
-            
+
             {/* 牌面选择区域 - 按牌型分组排列 */}
-            <div 
+            <div
               className="select-none p-1"
               onMouseUp={handleMouseUp}
               onMouseLeave={handleMouseUp}
@@ -1813,9 +1751,9 @@ const App: React.FC = () => {
               {(() => {
                 // 按牌型分组卡牌
                 const cardGroups: { [key: string]: Card[] } = {};
-                
-                cards.forEach(card => {
-                  const groupKey = card.rank === 15 ? 'joker' : card.rank.toString();
+
+                allCards.forEach(card => {
+                  const groupKey = card.rank === Rank.JOKER_SMALL || card.rank === Rank.JOKER_BIG ? 'joker' : card.rank.toString();
                   if (!cardGroups[groupKey]) {
                     cardGroups[groupKey] = [];
                   }
@@ -1847,14 +1785,14 @@ const App: React.FC = () => {
                       <div className="grid grid-cols-8 gap-0.5">
                         {groupCards.map((card) => {
                           const isSelected = selectedCards.has(card.id);
-                          const isPlayed = playedCards[card.id];
-                          const playerColor = isPlayed ? playerColors[isPlayed] : undefined;
-                          
+                          const isPlayed = card.isPlayed;
+                          const playerColor = isPlayed ? playerColors[playHistory.find(ph => ph.cards.some(c => c.id === card.id))?.playerPosition || 'bottom'] : undefined;
+
                           // 检查卡牌是否已被分配给某个玩家
                           let assignedPlayer = null;
                           let isRevealedCard = false;
                           // 在手牌输入模式或游戏开始后都需要检查卡牌归属
-                          if (handInput.isInputMode || handInput.gameStarted) {
+                          if (handInput.isInputMode || gameState.status === GameStatus.PLAYING || gameState.status === GameStatus.FINISHED) {
                             for (const [player, hands] of Object.entries(handInput.playerHands)) {
                               if (hands.some(handCard => handCard.id === card.id)) {
                                 assignedPlayer = player as PlayerPosition;
@@ -1864,16 +1802,16 @@ const App: React.FC = () => {
                               }
                             }
                           }
-                          
+
                           // 检查卡牌是否可选择
                           const cardSelectable = isCardSelectable(card.id);
-                          
+
                           return (
                             <div
                               key={card.id}
                               className={`relative flex-shrink-0 ${
-                                isPlayed ? 'cursor-not-allowed' : 
-                                !cardSelectable && handInput.gameStarted ? 'cursor-not-allowed opacity-60' : 
+                                isPlayed ? 'cursor-not-allowed' :
+                                !cardSelectable && (gameState.status === GameStatus.PLAYING || gameState.status === GameStatus.FINISHED) ? 'cursor-not-allowed opacity-60' :
                                 ''
                               }`}
                               style={{
@@ -1920,13 +1858,13 @@ const App: React.FC = () => {
                                     const touchTimer = setTimeout(() => {
                                       toggleRevealedCard(card.id, assignedPlayer);
                                     }, 500);
-                                    
+
                                     const handleTouchEnd = () => {
                                       clearTimeout(touchTimer);
                                       e.target?.removeEventListener('touchend', handleTouchEnd);
                                       e.target?.removeEventListener('touchmove', handleTouchEnd);
                                     };
-                                    
+
                                     e.target?.addEventListener('touchend', handleTouchEnd);
                                     e.target?.addEventListener('touchmove', handleTouchEnd);
                                   }
@@ -1942,24 +1880,27 @@ const App: React.FC = () => {
                               {/* 已出牌的半透明遮罩和标注 */}
                               {isPlayed && (
                                 <>
-                                  <div 
+                                  <div
                                     className="absolute inset-0 rounded-lg"
-                                    style={{ 
+                                    style={{
                                       backgroundColor: playerColor,
                                       opacity: 0.3,
                                       pointerEvents: 'none'
                                     }}
                                   />
                                   <div className="absolute top-0 left-0 bg-black bg-opacity-70 text-white text-xs px-1 py-0.5 rounded-br-lg rounded-tl-lg font-bold">
-                                    {isPlayed === 'bottom' ? '我' : isPlayed === 'left' ? '下家' : isPlayed === 'top' ? '对家' : '上家'}
+                                    {playHistory.find(ph => ph.cards.some(c => c.id === card.id))?.playerPosition === 'bottom' ? '我' :
+                                     playHistory.find(ph => ph.cards.some(c => c.id === card.id))?.playerPosition === 'left' ? '下家' :
+                                     playHistory.find(ph => ph.cards.some(c => c.id === card.id))?.playerPosition === 'top' ? '对家' :
+                                     playHistory.find(ph => ph.cards.some(c => c.id === card.id))?.playerPosition === 'right' ? '上家' : ''}
                                   </div>
                                 </>
                               )}
                               {/* 手牌输入模式：已分配卡牌的半透明遮罩 */}
                               {!isPlayed && assignedPlayer && (
-                                <div 
+                                <div
                                   className="absolute inset-0 rounded-lg"
-                                  style={{ 
+                                  style={{
                                     backgroundColor: assignedPlayer === 'bottom' ? '#fbbf24' : playerColors[assignedPlayer],
                                     opacity: 0.2,
                                     pointerEvents: 'none'
@@ -1970,14 +1911,14 @@ const App: React.FC = () => {
                               {/* 明牌标记 */}
                               {!isPlayed && assignedPlayer && isRevealedCard && (
                                 <>
-                                  <div 
+                                  <div
                                     className="absolute inset-0 rounded-lg border-2"
-                                    style={{ 
+                                    style={{
                                       borderColor: '#fbbf24',
                                       pointerEvents: 'none'
                                     }}
                                   />
-                                  <div 
+                                  <div
                                     className="absolute top-0 right-0 w-4 h-4 bg-yellow-400 rounded-full flex items-center justify-center text-xs font-bold text-white transform translate-x-1 -translate-y-1"
                                     style={{ pointerEvents: 'none' }}
                                     title="明牌"
@@ -1995,17 +1936,17 @@ const App: React.FC = () => {
                 });
               })()}
             </div>
-            
+
             {/* 操作提示 */}
             <div className="mt-4 text-xs text-gray-500 space-y-1">
-              {gameState.phase === 'finished' ? (
+              {gameState.status === GameStatus.FINISHED ? (
                 <>
                   <div>• 🏆 游戏已结束！我的手牌出完</div>
-                  <div>• 游戏时长: {getGameDuration()}，总出牌次数: {gameState.totalPlays}次</div>
+                  <div>• 游戏时长: {getGameDuration()}，总出牌次数: {playHistory.length}次</div>
                   <div>• 点击"重新开始"可以开始新游戏</div>
                   <div>• 点击"返回输入"可以修改手牌设置</div>
                 </>
-              ) : handInput.gameStarted ? (
+              ) : gameState.status === GameStatus.PLAYING ? (
                 <>
                   <div>• 🎮 游戏进行中：严格明牌权限控制已启用</div>
                   <div>• 我的27张明牌只能由我选择，其他玩家不能选择</div>
@@ -2013,9 +1954,13 @@ const App: React.FC = () => {
                   <div>• 出牌后自动切换至下一家（我→下家→对家→上家）</div>
                   <div>• 出牌时自动验证掼蛋牌型：单、对、三不带、三带二、飞机、连对、顺子、炸弹</div>
                   <div>• 红色卡牌表示配牌，可代替任意牌参与牌型组合</div>
-                  <div>• 三家出完牌游戏才结束，已胜利玩家显示皇冠标志</div>
+                  <div>• 5张顺子默认为同花顺，可以管上5张以下的炸弹</div>
+                  <div>• 炸弹可以使用红心配牌，5张以上炸弹可以管上5张顺子</div>
+                  <div>• 已出牌显示对应玩家颜色标识，可在设置中自定义颜色</div>
+                  <div>• 红色卡牌表示配牌，可代替任意牌参与牌型组合</div>
+                  <div>• 支持撤销功能，可连续撤销错误出牌</div>
                 </>
-              ) : handInput.isInputMode ? (
+              ) : gameState.status === GameStatus.INPUT ? (
                 <>
                   <div>• 🃏 手牌输入模式：当前我有{handInput.playerHands.bottom.length}张手牌</div>
                   <div>• 操作流程：点击玩家头像 → 点击卡牌添加手牌 → 点击"开始游戏"</div>
@@ -2055,360 +2000,97 @@ const App: React.FC = () => {
         </div>
       </main>
 
-      {/* 设置面板 */}
-      {showSettings && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-md w-full max-h-full overflow-y-auto">
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-bold text-gray-800">游戏设置</h2>
-                <button
-                  onClick={() => setShowSettings(false)}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                  </svg>
-                </button>
-              </div>
-              
-              <div className="space-y-6">
-                {/* 玩家颜色设置 */}
-                <div>
-                  <h3 className="text-lg font-medium text-gray-800 mb-3">玩家颜色设置</h3>
-                  <div className="space-y-3">
-                    {(['bottom', 'left', 'top', 'right'] as PlayerPosition[]).map(position => {
-                      const playerNames = {
-                        bottom: '我',
-                        left: '对手一',
-                        top: '队友',
-                        right: '对手二'
-                      };
-                      
-                      return (
-                        <div key={position} className="flex items-center justify-between">
-                          <span className="text-sm text-gray-700">{playerNames[position]}</span>
-                          <div className="flex items-center space-x-2">
-                            <input
-                              type="color"
-                              value={playerColors[position]}
-                              onChange={(e) => setPlayerColors(prev => ({
-                                ...prev,
-                                [position]: e.target.value
-                              }))}
-                              className="w-8 h-8 border border-gray-300 rounded cursor-pointer"
-                            />
-                            <button
-                              onClick={() => setPlayerColors(prev => ({
-                                ...prev,
-                                [position]: {
-                                  bottom: '#3b82f6',
-                                  left: '#10b981',
-                                  top: '#f59e0b',
-                                  right: '#ef4444'
-                                }[position]
-                              }))}
-                              className="text-xs text-gray-500 hover:text-gray-700"
-                            >
-                              重置
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div>
-                  <h3 className="text-lg font-medium text-gray-800 mb-3">游戏规则</h3>
-                  <div className="space-y-3">
-                    <label className="flex items-center">
-                      <input type="checkbox" className="rounded" defaultChecked />
-                      <span className="ml-2 text-sm text-gray-700">启用牌型验证</span>
-                    </label>
-                    <label className="flex items-center">
-                      <input type="checkbox" className="rounded" defaultChecked />
-                      <span className="ml-2 text-sm text-gray-700">红心级数牌作为配牌</span>
-                    </label>
-                    <label className="flex items-center">
-                      <input type="checkbox" className="rounded" defaultChecked />
-                      <span className="ml-2 text-sm text-gray-700">启用自动保存</span>
-                    </label>
-                  </div>
-                </div>
-                
-                <div className="space-y-3">
-                  <button 
-                    onClick={() => {
-                      setPlayedCards({});
-                      setPlayHistory([]);
-                      setSelectedCards(new Set());
-                      resetMultiSelectMode();
-                      // 直接重置，不显示提示
-                    }}
-                    className="w-full bg-red-500 text-white py-2 px-4 rounded hover:bg-red-600 transition-colors"
-                  >
-                    重置游戏
-                  </button>
-                  <button 
-                    onClick={() => {
-                      // 导出游戏数据
-                      const exportData = {
-                        timestamp: Date.now(),
-                        currentRank,
-                        gameState,
-                        playedCards,
-                        handInput,
-                        playHistory,
-                        playerRankings,
-                        version: '1.0'
-                      };
-                      
-                      const dataStr = JSON.stringify(exportData, null, 2);
-                      const dataBlob = new Blob([dataStr], { type: 'application/json' });
-                      const url = URL.createObjectURL(dataBlob);
-                      const link = document.createElement('a');
-                      link.href = url;
-                      link.download = `guandan-game-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.json`;
-                      document.body.appendChild(link);
-                      link.click();
-                      document.body.removeChild(link);
-                      URL.revokeObjectURL(url);
-                      
-                      alert('游戏数据已导出！');
-                    }}
-                    className="w-full bg-green-500 text-white py-2 px-4 rounded hover:bg-green-600 transition-colors"
-                  >
-                    导出游戏数据
-                  </button>
-                  <button 
-                    onClick={() => {
-                      // 保存当前游戏到历史记录
-                      try {
-                        const gameId = saveCurrentGame(
-                          cards.map(card => ({
-                            ...card,
-                            suit: card.rank === 15 ? null : (card.suit as any),
-                            isPlayed: playedCards[card.id] ? true : false,
-                            isSelected: false,
-                            timestamp: Date.now()
-                          })), 
-                          playedCards, 
-                          currentRank, 
-                          [
-                            { id: 'p1', position: 'bottom', name: '我', team: 1 },
-                            { id: 'p2', position: 'left', name: '对手一', team: 2 },
-                            { id: 'p3', position: 'top', name: '队友', team: 1 },
-                            { id: 'p4', position: 'right', name: '对手二', team: 2 }
-                          ],
-                          gameState,
-                          {
-                            isCompleted: gameState.phase === 'finished',
-                            winningTeam: checkGameEnd().winningTeam as 1 | 2 | undefined,
-                            notes: `手动保存 - ${getGameDuration()}游戏时长，共出牌${gameState.totalPlays}次`,
-                            tags: ['手动保存', currentRank + '级', gameState.phase === 'finished' ? '已完成' : '进行中']
-                          }
-                        );
-                        alert(`游戏已保存！游戏ID: ${gameId}`);
-                      } catch (error) {
-                        console.error('保存游戏失败:', error);
-                        alert('保存游戏失败，请稍后重试');
-                      }
-                    }}
-                    className="w-full bg-blue-500 text-white py-2 px-4 rounded hover:bg-blue-600 transition-colors"
-                  >
-                    保存当前游戏
-                  </button>
-                  <button 
-                    onClick={() => {
-                      setShowSettings(false);
-                      setShowGameHistory(true);
-                    }}
-                    className="w-full bg-purple-500 text-white py-2 px-4 rounded hover:bg-purple-600 transition-colors"
-                  >
-                    📂 加载历史游戏
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 回放弹窗 */}
-      {showReplay && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-7xl w-full max-h-full overflow-hidden">
-            <div className="flex items-center justify-between p-4 border-b border-gray-200">
-              <h2 className="text-xl font-bold text-gray-800">🎬 牌桌回放</h2>
-              <button
-                onClick={() => setShowReplay(false)}
-                className="text-gray-400 hover:text-gray-600 p-1"
-              >
-                <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                </svg>
-              </button>
-            </div>
-            <div className="overflow-y-auto" style={{ height: 'calc(100vh - 200px)' }}>
-              {currentReplayGameId ? (
-                (() => {
-                  const gameRecord = loadGameRecord(currentReplayGameId);
-                  return gameRecord ? (
-                    <GameReplay
-                      gameRecord={gameRecord}
-                      replayState={replayState}
-                      onReplayControl={replayControl}
-                      displayMode="table"
-                    />
-                  ) : (
-                    <div className="flex items-center justify-center h-full">
-                      <p className="text-gray-500">无法加载回放数据</p>
-                    </div>
-                  );
-                })()
-              ) : (
-                <div className="flex items-center justify-center h-full">
-                  <p className="text-gray-500">请先启动回放</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 游戏历史弹窗 */}
+      {/* 历史游戏记录弹窗 */}
       {showGameHistory && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-4xl w-full max-h-full overflow-hidden">
-            <div className="flex items-center justify-between p-4 border-b border-gray-200">
-              <h2 className="text-xl font-bold text-gray-800">📂 历史游戏记录</h2>
-              <button
-                onClick={() => setShowGameHistory(false)}
-                className="text-gray-400 hover:text-gray-600 p-1"
-              >
-                <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                </svg>
-              </button>
-            </div>
-            <div className="overflow-y-auto p-4" style={{ height: 'calc(100vh - 200px)' }}>
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl p-6 w-11/12 max-w-3xl max-h-[90vh] flex flex-col">
+            <h2 className="text-xl font-bold mb-4">历史游戏记录</h2>
+            <div className="flex-grow overflow-y-auto mb-4">
               {gameRecords.length === 0 ? (
-                <div className="text-center py-8">
-                  <div className="text-gray-500 text-lg mb-2">暂无历史游戏记录</div>
-                  <div className="text-gray-400 text-sm">保存游戏后将在这里显示</div>
-                </div>
+                <p className="text-gray-600">暂无历史游戏记录。</p>
               ) : (
-                <div className="grid gap-4">
-                  {gameRecords.map((record, index) => (
-                    <div key={record.id} className="bg-gray-50 rounded-lg p-4 border hover:shadow-md transition-shadow">
-                      <div className="flex items-center justify-between">
-                        <div className="flex-1">
-                          <div className="flex items-center space-x-2 mb-2">
-                            <span className="font-semibold text-gray-800">
-                              #{index + 1} - {record.currentRank === 11 ? 'J' : record.currentRank === 12 ? 'Q' : record.currentRank === 13 ? 'K' : record.currentRank === 14 ? 'A' : record.currentRank}级
-                            </span>
-                            <span className={`px-2 py-1 text-xs rounded ${
-                              record.isCompleted ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
-                            }`}>
-                              {record.isCompleted ? '已完成' : '进行中'}
-                            </span>
-                            {record.winningTeam && (
-                              <span className={`px-2 py-1 text-xs rounded ${
-                                record.winningTeam === 1 ? 'bg-blue-100 text-blue-800' : 'bg-red-100 text-red-800'
-                              }`}>
-                                队伍{record.winningTeam}获胜
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-sm text-gray-600 grid grid-cols-2 gap-2">
-                            <div>🕐 {new Date(record.timestamp).toLocaleString('zh-CN')}</div>
-                            <div>⏱️ {Math.floor(record.duration / 60)}分{record.duration % 60}秒</div>
-                            <div>🃏 出牌{Object.keys(record.finalCardOwnership).length}张</div>
-                            <div>📊 比分 {record.gameResult.team1Score}:{record.gameResult.team2Score}</div>
-                          </div>
-                          {record.tags && record.tags.length > 0 && (
-                            <div className="flex flex-wrap gap-1 mt-2">
-                              {record.tags.map((tag, tagIndex) => (
-                                <span key={tagIndex} className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded">
-                                  {tag}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                          {record.notes && (
-                            <div className="text-sm text-gray-500 mt-2 italic">
-                              💭 {record.notes}
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex flex-col space-y-2 ml-4">
-                          <button
-                            onClick={() => loadSavedGame(record)}
-                            className="px-3 py-1 bg-green-500 text-white rounded text-sm hover:bg-green-600 transition-colors"
-                          >
-                            📂 加载游戏
-                          </button>
-                          <button
-                            onClick={() => {
-                              setCurrentReplayGameId(record.id);
-                              startReplay(record.id);
-                              setShowGameHistory(false);
-                              setShowReplay(true);
-                            }}
-                            className="px-3 py-1 bg-purple-500 text-white rounded text-sm hover:bg-purple-600 transition-colors"
-                          >
-                            🎬 回放
-                          </button>
-                          <button
-                            onClick={() => {
-                              const exportData = {
-                                ...record,
-                                exportTimestamp: Date.now(),
-                                version: '1.0'
-                              };
-                              
-                              const dataStr = JSON.stringify(exportData, null, 2);
-                              const dataBlob = new Blob([dataStr], { type: 'application/json' });
-                              const url = URL.createObjectURL(dataBlob);
-                              const link = document.createElement('a');
-                              link.href = url;
-                              link.download = `游戏记录-${record.currentRank}级-${new Date(record.timestamp).toISOString().slice(0, 19).replace(/:/g, '-')}.json`;
-                              document.body.appendChild(link);
-                              link.click();
-                              document.body.removeChild(link);
-                              URL.revokeObjectURL(url);
-                            }}
-                            className="px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600 transition-colors"
-                          >
-                            💾 导出
-                          </button>
-                        </div>
+                <ul className="space-y-3">
+                  {gameRecords.map(record => (
+                    <li key={record.id} className="bg-gray-50 p-3 rounded-lg border border-gray-200 flex justify-between items-center">
+                      <div>
+                        <p className="font-medium text-gray-800">游戏ID: {record.id}</p>
+                        <p className="text-sm text-gray-600">级数: {record.currentRank}</p>
+                        <p className="text-sm text-gray-600">状态: {record.isCompleted ? '已完成' : '进行中'}</p>
+                        <p className="text-sm text-gray-600">时长: {record.duration}</p>
+                        <p className="text-sm text-gray-600">出牌次数: {record.totalPlays}</p>
+                        {record.winningTeam && (
+                          <p className="text-sm text-green-700 font-semibold">获胜队伍: 团队{record.winningTeam}</p>
+                        )}
+                        {record.notes && (
+                          <p className="text-sm text-gray-500 italic">备注: {record.notes}</p>
+                        )}
                       </div>
-                    </div>
+                      <button
+                        onClick={() => loadSavedGame(record)}
+                        className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm"
+                      >
+                        加载
+                      </button>
+                    </li>
                   ))}
-                </div>
+                </ul>
               )}
             </div>
+            <button
+              onClick={() => setShowGameHistory(false)}
+              className="mt-4 px-4 py-2 bg-gray-300 text-gray-800 rounded-lg hover:bg-gray-400 transition-colors"
+            >
+              关闭
+            </button>
           </div>
         </div>
       )}
-      
+
+      {/* 牌桌回放弹窗 */}
+      {showReplay && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl p-6 w-11/12 max-w-4xl max-h-[90vh] flex flex-col">
+            <h2 className="text-xl font-bold mb-4">牌桌回放</h2>
+            <div className="flex-grow overflow-y-auto mb-4">
+              {currentReplayGameId ? (
+                <GameReplay
+                  gameId={currentReplayGameId}
+                  onClose={() => setShowReplay(false)}
+                  replayControl={replayControl}
+                />
+              ) : (
+                <p className="text-gray-600">请先开始游戏并保存记录，或从历史记录中加载游戏以进行回放。</p>
+              )}
+            </div>
+            <button
+              onClick={() => {
+                stopReplay();
+                setShowReplay(false);
+              }}
+              className="mt-4 px-4 py-2 bg-gray-300 text-gray-800 rounded-lg hover:bg-gray-400 transition-colors"
+            >
+              关闭回放
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* AI助手组件 */}
       {showAIAssistant && (
         <AIAssistant
           aiAnalysis={aiAnalysis}
-          passAnalysis={getPassAnalysis()}
-          breakingAnalysis={getBreakingAnalysis()}
           enabled={aiEnabled}
           onToggle={setAIEnabled}
           onRefresh={triggerAIAnalysis}
-          onAcceptSuggestion={(suggestion) => {
-            console.log('AI建议:', suggestion);
-            // 这里可以添加接受建议的逻辑
-          }}
+          playHistory={playHistory}
+          currentRank={currentRank}
+          currentPlayer={selectedPlayer}
+          gameState={gameState} // 传递完整的gameState对象
         />
       )}
+
+      {/* 语音控制组件 */}
+      <VoiceControl />
     </div>
   );
 };

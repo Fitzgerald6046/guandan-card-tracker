@@ -1,15 +1,17 @@
 /**
- * AI助手组件
- * 集成智能推理、概率分析、出牌建议等功能
+ * 增强版AI助手组件
+ * 基于实战算牌技巧的智能推理系统
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
+import { getAIAdvice, GuandanAIReasoningEngine } from '../utils/aiReasoningEngine';
 import type { 
   AIAnalysisResult, 
   PlayerPosition,
   PassAnalysis,
   BreakingPatternAnalysis,
-  Card
+  PlayRecord,
+  GameRank
 } from '../types/game';
 
 // ==================== 类型定义 ====================
@@ -29,6 +31,12 @@ interface AIAssistantProps {
   onRefresh: () => void;
   /** 接受AI建议回调 */
   onAcceptSuggestion?: (suggestion: string) => void;
+  /** 出牌历史记录 */
+  playHistory?: PlayRecord[];
+  /** 当前级数 */
+  currentRank?: GameRank;
+  /** 当前玩家位置 */
+  currentPlayer?: PlayerPosition;
 }
 
 // ==================== 子组件 ====================
@@ -66,186 +74,137 @@ const AIStatusIndicator: React.FC<{
   );
 };
 
-/**
- * 玩家威胁等级显示
- */
-const ThreatLevelDisplay: React.FC<{
-  threatLevels: AIAnalysisResult['threatLevels'];
-}> = ({ threatLevels }) => {
-  const positions: { pos: PlayerPosition; name: string }[] = [
-    { pos: 'top', name: '对家' },
-    { pos: 'left', name: '上家' },
-    { pos: 'right', name: '下家' },
-    { pos: 'bottom', name: '我' }
-  ];
-  
-  const getThreatColor = (level: string) => {
-    switch (level) {
-      case 'critical': return 'text-red-600 bg-red-100';
-      case 'high': return 'text-orange-600 bg-orange-100';
-      case 'medium': return 'text-yellow-600 bg-yellow-100';
-      case 'low': return 'text-green-600 bg-green-100';
-      default: return 'text-gray-600 bg-gray-100';
-    }
-  };
-  
-  const getThreatIcon = (level: string) => {
-    switch (level) {
-      case 'critical': return '🔴';
-      case 'high': return '🟠';
-      case 'medium': return '🟡';
-      case 'low': return '🟢';
-      default: return '⚪';
-    }
-  };
-  
-  return (
-    <div className="space-y-2">
-      <h4 className="text-sm font-medium text-gray-700">威胁评估</h4>
-      <div className="grid grid-cols-2 gap-2 text-xs">
-        {positions.map(({ pos, name }) => {
-          const threat = threatLevels[pos];
-          return (
-            <div 
-              key={pos}
-              className={`p-2 rounded-lg border ${getThreatColor(threat.level)}`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="font-medium">{name}</span>
-                <span>{getThreatIcon(threat.level)}</span>
-              </div>
-              <div className="text-xs opacity-75 mt-1">
-                {threat.reasoning[0] || '正常'}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
 
 /**
- * 剩余牌数预测
+ * 增强版智能推理分析组件
  */
-const CardCountPrediction: React.FC<{
-  estimatedCardCounts: AIAnalysisResult['estimatedCardCounts'];
-}> = ({ estimatedCardCounts }) => {
-  const positions: { pos: PlayerPosition; name: string }[] = [
-    { pos: 'top', name: '对家' },
-    { pos: 'left', name: '上家' },
-    { pos: 'right', name: '下家' },
-    { pos: 'bottom', name: '我' }
-  ];
+const EnhancedSmartAnalysis: React.FC<{
+  playHistory: PlayRecord[];
+  currentRank: GameRank;
+  currentPlayer: PlayerPosition;
+  reasoningEngine: GuandanAIReasoningEngine;
+}> = ({ playHistory, currentRank, reasoningEngine }) => {
   
-  return (
-    <div className="space-y-2">
-      <h4 className="text-sm font-medium text-gray-700">剩余牌数</h4>
-      <div className="space-y-1">
-        {positions.map(({ pos, name }) => {
-          const estimate = estimatedCardCounts[pos];
-          const confidence = Math.round(estimate.confidence * 100);
-          
-          return (
-            <div key={pos} className="flex items-center justify-between text-xs">
-              <span className="text-gray-600">{name}</span>
-              <div className="flex items-center space-x-2">
-                <span className="font-medium">{estimate.count}张</span>
-                <span className="text-gray-500">({confidence}%)</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
+  // 使用增强推理引擎进行分析
+  const analysisResult = useMemo(() => {
+    if (playHistory.length === 0) return null;
+    
+    reasoningEngine.updateGameData(playHistory, currentRank);
+    return reasoningEngine.performFullAnalysis();
+  }, [playHistory, currentRank, reasoningEngine]);
 
-/**
- * AI建议显示
- */
-const SuggestionDisplay: React.FC<{
-  suggestions: AIAnalysisResult['suggestions'];
-  onAccept?: (suggestion: string) => void;
-}> = ({ suggestions, onAccept }) => {
+  if (!analysisResult) {
+    return (
+      <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-center">
+        <div className="text-gray-400 mb-1">🤔</div>
+        <p className="text-sm text-gray-600">等待出牌数据...</p>
+        <p className="text-xs text-gray-500">开始记录出牌后将启动AI分析</p>
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-2">
-      <h4 className="text-sm font-medium text-gray-700">AI建议</h4>
+    <div className="space-y-4">
+      {/* AI推理置信度 */}
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-sm font-medium text-blue-800">
-            {suggestions.action === 'play' ? '🎯 建议出牌' : 
-             suggestions.action === 'pass' ? '🚫 建议过牌' : '⏳ 建议等待'}
-          </span>
-          <span className="text-xs text-blue-600">
-            置信度: {Math.round(suggestions.confidence * 100)}%
-          </span>
+        <div className="flex justify-between items-center mb-2">
+          <h4 className="text-sm font-medium text-blue-800">AI推理分析</h4>
+          <div className="text-xs text-blue-600">
+            置信度: {Math.round(analysisResult.confidence * 100)}%
+          </div>
         </div>
-        <p className="text-sm text-blue-700 mb-3">
-          {suggestions.reasoning}
-        </p>
-        {onAccept && (
-          <button
-            onClick={() => onAccept(suggestions.reasoning)}
-            className="w-full px-3 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 transition-colors"
-          >
-            采用建议
-          </button>
-        )}
-        {suggestions.alternativeOptions && suggestions.alternativeOptions.length > 0 && (
-          <div className="mt-2 pt-2 border-t border-blue-200">
-            <div className="text-xs text-blue-600 mb-1">其他选项:</div>
-            {suggestions.alternativeOptions.map((option, index) => (
-              <div key={index} className="text-xs text-blue-600">
-                • {option}
+        <div className="text-xs text-blue-600">
+          基于 {playHistory.length} 次出牌进行概率推理
+        </div>
+      </div>
+
+      {/* 关键牌分析 */}
+      <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
+        <h4 className="text-sm font-medium text-purple-800 mb-2">关键牌态势</h4>
+        <div className="space-y-1 text-sm text-purple-700">
+          <div>
+            🎯 级牌{currentRank}: 剩余{analysisResult.structureAnalysis.criticalCardAnalysis.rankCards.remaining}张 
+            ({analysisResult.structureAnalysis.criticalCardAnalysis.rankCards.distribution})
+          </div>
+          <div>
+            🔑 5和10: 剩余{analysisResult.structureAnalysis.criticalCardAnalysis.fives.remaining}+{analysisResult.structureAnalysis.criticalCardAnalysis.tens.remaining}张
+          </div>
+        </div>
+      </div>
+
+      {/* 强否定推理 */}
+      {analysisResult.warnings.length > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+          <h4 className="text-sm font-medium text-red-800 mb-2">🚫 风险警告</h4>
+          <div className="space-y-2">
+            {analysisResult.warnings.map((warning, index) => (
+              <div key={index} className="text-sm text-red-700">
+                {warning}
               </div>
             ))}
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* 正向推理洞察 */}
+      {analysisResult.strategicInsights.length > 0 && (
+        <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+          <h4 className="text-sm font-medium text-green-800 mb-2">💡 战略洞察</h4>
+          <div className="space-y-1">
+            {analysisResult.strategicInsights.map((insight: string, index: number) => (
+              <div key={index} className="text-sm text-green-700">
+                • {insight}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 结构逻辑推理 */}
+      {analysisResult.recommendations.immediate.length > 0 && (
+        <div className="bg-orange-50 border border-orange-200 rounded-lg p-3">
+          <h4 className="text-sm font-medium text-orange-800 mb-2">🧠 即时建议</h4>
+          <div className="space-y-1">
+            {analysisResult.recommendations.immediate.map((recommendation: string, index: number) => (
+              <div key={index} className="text-sm text-orange-700">
+                • {recommendation}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 当没有足够数据时的提示 */}
+      {analysisResult.confidence < 0.4 && (
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-center">
+          <div className="text-gray-400 mb-1">🤔</div>
+          <p className="text-sm text-gray-600">数据积累中...</p>
+          <p className="text-xs text-gray-500">更多出牌和过牌记录将提升推理精度</p>
+        </div>
+      )}
     </div>
   );
 };
+
 
 // ==================== 主组件 ====================
 
 export const AIAssistant: React.FC<AIAssistantProps> = ({
   aiAnalysis,
-  passAnalysis,
-  breakingAnalysis,
   enabled,
   onToggle,
   onRefresh,
-  onAcceptSuggestion
+  playHistory = [],
+  currentRank = 7 as GameRank,
+  currentPlayer = 'bottom'
 }) => {
   const [isMinimized, setIsMinimized] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'analysis' | 'suggestions'>('overview');
   
-  // 游戏阶段显示
-  const getPhaseDisplay = (phase: string) => {
-    const phaseNames = {
-      early: '🌅 早期',
-      middle: '🌞 中期', 
-      late: '🌆 后期',
-      endgame: '🌙 残局'
-    };
-    return phaseNames[phase as keyof typeof phaseNames] || phase;
-  };
+  // 创建推理引擎实例
+  const reasoningEngine = useMemo(() => {
+    return new GuandanAIReasoningEngine(currentRank);
+  }, [currentRank]);
   
-  // 过牌分析汇总
-  const passAnalysisSummary = useMemo(() => {
-    const summary = new Map<PlayerPosition, number>();
-    passAnalysis.forEach(analysis => {
-      const count = summary.get(analysis.playerPosition) || 0;
-      summary.set(analysis.playerPosition, count + 1);
-    });
-    return summary;
-  }, [passAnalysis]);
-  
-  // 拆牌分析汇总
-  const breakingAnalysisSummary = useMemo(() => {
-    return breakingAnalysis.length;
-  }, [breakingAnalysis]);
   
   return (
     <div className="fixed bottom-4 right-4 w-80 bg-white rounded-lg shadow-xl border border-gray-200 z-50">
@@ -290,28 +249,7 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({
       {/* 内容区域 */}
       {!isMinimized && (
         <div>
-          {/* 标签栏 */}
-          <div className="flex border-b border-gray-200">
-            {[
-              { key: 'overview', label: '总览' },
-              { key: 'analysis', label: '分析' },
-              { key: 'suggestions', label: '建议' }
-            ].map(tab => (
-              <button
-                key={tab.key}
-                onClick={() => setActiveTab(tab.key as any)}
-                className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${
-                  activeTab === tab.key 
-                    ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50' 
-                    : 'text-gray-600 hover:text-gray-800'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-          
-          {/* 内容面板 */}
+          {/* 内容面板 - 直接显示分析界面 */}
           <div className="p-4 max-h-96 overflow-y-auto">
             {!enabled ? (
               <div className="text-center py-8">
@@ -324,77 +262,13 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({
                   启用AI
                 </button>
               </div>
-            ) : !aiAnalysis ? (
-              <div className="text-center py-8">
-                <div className="text-gray-400 mb-2">⏳</div>
-                <p className="text-sm text-gray-500">等待游戏数据...</p>
-              </div>
             ) : (
-              <>
-                {/* 总览标签 */}
-                {activeTab === 'overview' && (
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-gray-700">游戏阶段</span>
-                      <span className="text-sm text-gray-600">
-                        {getPhaseDisplay(aiAnalysis.gamePhase)}
-                      </span>
-                    </div>
-                    
-                    <ThreatLevelDisplay threatLevels={aiAnalysis.threatLevels} />
-                    <CardCountPrediction estimatedCardCounts={aiAnalysis.estimatedCardCounts} />
-                  </div>
-                )}
-                
-                {/* 分析标签 */}
-                {activeTab === 'analysis' && (
-                  <div className="space-y-4">
-                    <div>
-                      <h4 className="text-sm font-medium text-gray-700 mb-2">过牌分析</h4>
-                      {passAnalysisSummary.size > 0 ? (
-                        <div className="space-y-1">
-                          {Array.from(passAnalysisSummary.entries()).map(([pos, count]) => (
-                            <div key={pos} className="flex justify-between text-xs">
-                              <span className="text-gray-600">{pos}</span>
-                              <span className="text-gray-500">{count}次过牌</span>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="text-xs text-gray-500">暂无过牌记录</p>
-                      )}
-                    </div>
-                    
-                    <div>
-                      <h4 className="text-sm font-medium text-gray-700 mb-2">拆牌分析</h4>
-                      {breakingAnalysisSummary > 0 ? (
-                        <p className="text-xs text-gray-600">
-                          检测到 {breakingAnalysisSummary} 次可能的拆牌行为
-                        </p>
-                      ) : (
-                        <p className="text-xs text-gray-500">暂无拆牌记录</p>
-                      )}
-                    </div>
-                    
-                    <div>
-                      <h4 className="text-sm font-medium text-gray-700 mb-2">关键牌分布</h4>
-                      <div className="text-xs text-gray-600 space-y-1">
-                        <div>配牌: {Object.values(aiAnalysis.keyCardDistribution.wildCards).reduce((a, b) => a + b, 0)}张</div>
-                        <div>级牌: {Object.values(aiAnalysis.keyCardDistribution.rankCards).reduce((a, b) => a + b, 0)}张</div>
-                        <div>王牌: {Object.values(aiAnalysis.keyCardDistribution.jokers).reduce((a, b) => a + b, 0)}张</div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                
-                {/* 建议标签 */}
-                {activeTab === 'suggestions' && (
-                  <SuggestionDisplay 
-                    suggestions={aiAnalysis.suggestions}
-                    onAccept={onAcceptSuggestion}
-                  />
-                )}
-              </>
+              <EnhancedSmartAnalysis 
+                playHistory={playHistory}
+                currentRank={currentRank}
+                currentPlayer={currentPlayer}
+                reasoningEngine={reasoningEngine}
+              />
             )}
           </div>
         </div>

@@ -54,10 +54,12 @@ export type Team = 1 | 2;  // 简化为数字：1队（上下），2队（左右
 /** 游戏状态 */
 export const GameStatus = {
   WAITING: 'waiting',           // 等待开始
+  INPUT: 'input',               // 手牌输入
   DEALING: 'dealing',           // 发牌中
   PLAYING: 'playing',           // 游戏进行中
   ROUND_END: 'round_end',       // 回合结束
-  GAME_END: 'game_end'          // 游戏结束
+  GAME_END: 'game_end',         // 游戏结束
+  FINISHED: 'finished'          // 游戏完成
 } as const;
 
 export type GameStatus = typeof GameStatus[keyof typeof GameStatus];
@@ -552,6 +554,31 @@ export interface AIAnalysisResult {
     confidence: number;
     alternativeOptions?: string[];
   };
+  /** 结构分析 */
+  structureAnalysis: {
+    criticalCardAnalysis: {
+      rankCards: {
+        remaining: number;
+        distribution: string;
+      };
+      fives: {
+        remaining: number;
+      };
+      tens: {
+        remaining: number;
+      };
+    };
+  };
+  /** 警告信息 */
+  warnings: string[];
+  /** 战略洞察 */
+  strategicInsights: string[];
+  /** 推荐 */
+  recommendations: {
+    immediate: string[];
+  };
+  /** 置信度 */
+  confidence: number;
 }
 
 /** 过牌行为分析 */
