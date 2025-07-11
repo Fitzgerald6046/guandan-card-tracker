@@ -583,7 +583,7 @@ export function runAllTests(): {
 }
 
 // 自动运行测试（如果是直接执行）
-if (typeof window === 'undefined' && require.main === module) {
+if (typeof window === 'undefined' && import.meta.url.endsWith('testUtils.ts')) {
   runAllTests();
 }
 

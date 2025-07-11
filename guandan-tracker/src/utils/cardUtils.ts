@@ -19,7 +19,11 @@ export const generateDeck = (): Card[] => {
         suit,
         rank,
         isUsed: false,
-        isSelected: false
+        isSelected: false,
+        isRankCard: false,
+        isWildCard: false,
+        isPlayed: false,
+        timestamp: Date.now()
       });
     });
   });
@@ -42,28 +46,44 @@ export const generateDoubleDeck = (): Card[] => {
       suit: null,
       rank: Rank.JOKER_SMALL,
       isUsed: false,
-      isSelected: false
+      isSelected: false,
+      isRankCard: false,
+      isWildCard: false,
+      isPlayed: false,
+      timestamp: Date.now()
     },
     {
       id: 'joker-big-1',
       suit: null,
       rank: Rank.JOKER_BIG,
       isUsed: false,
-      isSelected: false
+      isSelected: false,
+      isRankCard: false,
+      isWildCard: false,
+      isPlayed: false,
+      timestamp: Date.now()
     },
     {
       id: 'joker-small-2',
       suit: null,
       rank: Rank.JOKER_SMALL,
       isUsed: false,
-      isSelected: false
+      isSelected: false,
+      isRankCard: false,
+      isWildCard: false,
+      isPlayed: false,
+      timestamp: Date.now()
     },
     {
       id: 'joker-big-2',
       suit: null,
       rank: Rank.JOKER_BIG,
       isUsed: false,
-      isSelected: false
+      isSelected: false,
+      isRankCard: false,
+      isWildCard: false,
+      isPlayed: false,
+      timestamp: Date.now()
     }
   ];
   

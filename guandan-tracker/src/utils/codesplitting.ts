@@ -489,19 +489,19 @@ export function useCodeSplitting() {
 
 // ==================== 预定义的懒加载组件 ====================
 
-// 游戏分析组件
-export const LazyGameAnalysis = createLazyComponent(
-  () => import('../components/GameAnalysis'),
-  'game-analysis',
-  { preload: 'hover' }
-);
+// 游戏分析组件 (暂时注释掉，组件不存在)
+// export const LazyGameAnalysis = createLazyComponent(
+//   () => import('../components/GameAnalysis'),
+//   'game-analysis',
+//   { preload: 'hover' }
+// );
 
-// 历史记录组件
-export const LazyGameHistory = createLazyComponent(
-  () => import('../components/GameHistory'),
-  'game-history',
-  { preload: 'idle' }
-);
+// 历史记录组件 (暂时注释掉，组件不存在)
+// export const LazyGameHistory = createLazyComponent(
+//   () => import('../components/GameHistory'),
+//   'game-history',
+//   { preload: 'idle' }
+// );
 
 // 数据导出组件
 export const LazyDataExport = createLazyComponent(

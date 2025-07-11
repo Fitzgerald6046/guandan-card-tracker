@@ -42,7 +42,7 @@ export function useTouchSelect() {
   const touchRef = useRef({
     startCoordinates: { x: 0, y: 0 },
     currentCoordinates: { x: 0, y: 0 },
-    longPressTimer: null as NodeJS.Timeout | null,
+    longPressTimer: null as ReturnType<typeof setTimeout> | null,
     isLongPress: false,
     hasMoved: false
   });

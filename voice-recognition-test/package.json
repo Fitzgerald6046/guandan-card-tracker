@@ -1,0 +1,26 @@
+{
+  "name": "guandan-voice-recognition-test",
+  "version": "1.0.0",
+  "description": "掼蛋语音记牌功能独立测试项目",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc && npm run copy-html",
+    "copy-html": "cp src/test/voice-test.html dist/test/",
+    "serve": "python3 -m http.server 8080 --directory dist",
+    "dev": "npm run build && npm run serve",
+    "test": "npm run build && echo 'Build successful! Run npm run serve to start test server'"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/web": "^0.0.99"
+  },
+  "keywords": [
+    "guandan",
+    "voice-recognition",
+    "speech",
+    "card-game"
+  ],
+  "author": "Guandan Card Tracker Team",
+  "license": "MIT"
+}

@@ -97,6 +97,15 @@ export interface Card {
   
   /** 卡牌创建时间戳（用于排序） */
   timestamp: number;
+  
+  /** 是否被使用（兼容性属性） */
+  isUsed?: boolean;
+  
+  /** 是否为级牌（兼容性属性） */
+  isLevel?: boolean;
+  
+  /** 是否为红色牌（兼容性属性） */
+  isRed?: boolean;
 }
 
 /** 卡牌创建参数 */

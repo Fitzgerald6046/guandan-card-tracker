@@ -366,7 +366,7 @@ export const ERROR_CODES = {
 /** 调试配置 */
 export const DEBUG_CONFIG = {
   /** 是否启用调试模式 */
-  ENABLE_DEBUG: process.env.NODE_ENV === 'development',
+  ENABLE_DEBUG: import.meta.env.DEV || false,
   
   /** 是否启用详细日志 */
   ENABLE_VERBOSE_LOGGING: false,

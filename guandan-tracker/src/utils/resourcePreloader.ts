@@ -760,7 +760,7 @@ export async function smartPreload(): Promise<void> {
   
   // 根据条件预加载次要资源
   const networkQuality = globalPreloader.getNetworkInfo();
-  if (networkQuality && !globalPreloader.getBatteryInfo()?.level < 0.2) {
+  if (networkQuality && (globalPreloader.getBatteryInfo()?.level || 1) > 0.2) {
     // 延迟预加载次要资源
     setTimeout(() => {
       preloadSecondaryResources();

@@ -1,5 +1,5 @@
-import type { GameState, Card, PlayRecord, GameRank, AIAnalysisResult, PlayerPosition, Suit, Rank, PlayType } from '../types/game';
-import { GAME_CONSTANTS, RANK_DISPLAY_NAMES, SUIT_SYMBOLS } from '../types/game';
+import type { GameState, Card, PlayRecord, GameRank, AIAnalysisResult, PlayerPosition, Suit, PlayType } from '../types/game';
+import { GAME_CONSTANTS, RANK_DISPLAY_NAMES, SUIT_SYMBOLS, Rank } from '../types/game';
 
 // 辅助函数：获取卡牌的等级（用于比较）
 const getCardValue = (card: Card): number => {

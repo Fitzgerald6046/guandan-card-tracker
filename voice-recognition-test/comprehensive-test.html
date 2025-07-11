@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>掼蛋语音识别AI增强 - 综合测试</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            padding: 24px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2rem;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1rem;
+        }
+        
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            min-height: 600px;
+        }
+        
+        .left-panel {
+            padding: 24px;
+            border-right: 1px solid #e5e7eb;
+        }
+        
+        .right-panel {
+            padding: 24px;
+            background: #f8fafc;
+        }
+        
+        .panel-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #1f2937;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .voice-control {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+        
+        .mic-button {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            font-size: 3rem;
+            color: white;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            margin-bottom: 16px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .mic-button:not(.listening):not(.processing) {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            box-shadow: 0 8px 32px rgba(102, 126, 234, 0.3);
+        }
+        
+        .mic-button:not(.listening):not(.processing):hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 40px rgba(102, 126, 234, 0.4);
+        }
+        
+        .mic-button.listening {
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
+            animation: pulse 2s infinite;
+        }
+        
+        .mic-button.processing {
+            background: linear-gradient(135deg, #feca57 0%, #ff9ff3 100%);
+            animation: rotate 1s linear infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        
+        @keyframes rotate {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        
+        .status-text {
+            font-size: 1.1rem;
+            font-weight: 500;
+            color: #374151;
+            margin-bottom: 16px;
+        }
+        
+        .config-section {
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 24px;
+        }
+        
+        .config-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #1f2937;
+            margin-bottom: 16px;
+        }
+        
+        .form-group {
+            margin-bottom: 16px;
+        }
+        
+        .form-group label {
+            display: block;
+            font-weight: 500;
+            color: #374151;
+            margin-bottom: 6px;
+        }
+        
+        .form-group select,
+        .form-group input[type="range"],
+        .form-group input[type="password"] {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .checkbox-group input[type="checkbox"] {
+            width: auto;
+        }
+        
+        .range-value {
+            font-weight: 600;
+            color: #3b82f6;
+        }
+        
+        .results-grid {
+            display: grid;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        
+        .result-card {
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 16px;
+            transition: all 0.2s;
+        }
+        
+        .result-card:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        
+        .result-header {
+            display: flex;
+            justify-content: between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        
+        .result-title {
+            font-weight: 600;
+            color: #1f2937;
+        }
+        
+        .confidence-badge {
+            background: #3b82f6;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        
+        .result-text {
+            font-size: 16px;
+            color: #1f2937;
+            margin-bottom: 8px;
+            font-family: 'SF Mono', Monaco, monospace;
+        }
+        
+        .result-meta {
+            font-size: 12px;
+            color: #6b7280;
+        }
+        
+        .correction-info {
+            background: #eff6ff;
+            border: 1px solid #dbeafe;
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 8px;
+        }
+        
+        .correction-method {
+            display: inline-block;
+            background: #3b82f6;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin-right: 8px;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        
+        .stat-card {
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 16px;
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #3b82f6;
+        }
+        
+        .stat-label {
+            font-size: 14px;
+            color: #6b7280;
+            margin-top: 4px;
+        }
+        
+        .test-commands {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+        }
+        
+        .test-cmd {
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: center;
+        }
+        
+        .test-cmd:hover {
+            background: #f3f4f6;
+            border-color: #3b82f6;
+            transform: translateY(-2px);
+        }
+        
+        .test-cmd-text {
+            font-weight: 500;
+            color: #1f2937;
+            margin-bottom: 4px;
+        }
+        
+        .test-cmd-desc {
+            font-size: 12px;
+            color: #6b7280;
+        }
+        
+        .error-card {
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+        
+        .error-title {
+            color: #dc2626;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        
+        .error-text {
+            color: #7f1d1d;
+        }
+        
+        .clear-btn {
+            background: #6b7280;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        
+        .clear-btn:hover {
+            background: #4b5563;
+        }
+        
+        .unsupported {
+            text-align: center;
+            padding: 40px;
+            color: #6b7280;
+        }
+        
+        .unsupported-icon {
+            font-size: 4rem;
+            margin-bottom: 16px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎤 掼蛋语音识别AI增强测试</h1>
+            <p>集成本地规则纠错 + 远程AI增强的智能语音识别系统</p>
+        </div>
+        
+        <div class="main-content">
+            <!-- 左侧控制面板 -->
+            <div class="left-panel">
+                <div class="panel-title">
+                    🎙️ 语音控制
+                </div>
+                
+                <div id="supported-content">
+                    <!-- 语音控制区域 -->
+                    <div class="voice-control">
+                        <button id="micButton" class="mic-button">
+                            🎤
+                        </button>
+                        <div id="statusText" class="status-text">
+                            点击麦克风开始语音识别
+                        </div>
+                    </div>
+                    
+                    <!-- 配置区域 -->
+                    <div class="config-section">
+                        <div class="config-title">🔧 增强配置</div>
+                        
+                        <div class="form-group">
+                            <label for="strategy">处理策略:</label>
+                            <select id="strategy">
+                                <option value="local-first">本地优先</option>
+                                <option value="ai-first">AI优先</option>
+                                <option value="parallel">并行处理</option>
+                                <option value="cascade">级联处理</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <div class="checkbox-group">
+                                <input type="checkbox" id="enableLocal" checked>
+                                <label for="enableLocal">启用本地规则纠错</label>
+                            </div>
+                        </div>
+                        
+                        <div class="form-group">
+                            <div class="checkbox-group">
+                                <input type="checkbox" id="enableRemote">
+                                <label for="enableRemote">启用远程AI增强</label>
+                            </div>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="localThreshold">本地纠错阈值: <span id="localThresholdValue" class="range-value">0.6</span></label>
+                            <input type="range" id="localThreshold" min="0" max="1" step="0.1" value="0.6">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="remoteThreshold">远程AI阈值: <span id="remoteThresholdValue" class="range-value">0.4</span></label>
+                            <input type="range" id="remoteThreshold" min="0" max="1" step="0.1" value="0.4">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="apiKey">OpenAI API Key (可选):</label>
+                            <input type="password" id="apiKey" placeholder="sk-..." autocomplete="off">
+                        </div>
+                    </div>
+                    
+                    <!-- 快速测试 -->
+                    <div class="config-section">
+                        <div class="config-title">⚡ 快速测试</div>
+                        <div class="test-commands">
+                            <div class="test-cmd" data-text="我单勾">
+                                <div class="test-cmd-text">我单勾</div>
+                                <div class="test-cmd-desc">J识别错误</div>
+                            </div>
+                            <div class="test-cmd" data-text="上对圈">
+                                <div class="test-cmd-text">上对圈</div>
+                                <div class="test-cmd-desc">Q识别错误</div>
+                            </div>
+                            <div class="test-cmd" data-text="对三尖带5">
+                                <div class="test-cmd-text">对三尖带5</div>
+                                <div class="test-cmd-desc">A识别错误</div>
+                            </div>
+                            <div class="test-cmd" data-text="下炸八八">
+                                <div class="test-cmd-text">下炸八八</div>
+                                <div class="test-cmd-desc">重复错误</div>
+                            </div>
+                            <div class="test-cmd" data-text="俺过">
+                                <div class="test-cmd-text">俺过</div>
+                                <div class="test-cmd-desc">方言错误</div>
+                            </div>
+                            <div class="test-cmd" data-text="我单1010">
+                                <div class="test-cmd-text">我单1010</div>
+                                <div class="test-cmd-desc">数字重复</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="unsupported-content" class="unsupported" style="display: none;">
+                    <div class="unsupported-icon">🚫</div>
+                    <h3>浏览器不支持语音识别</h3>
+                    <p>请使用支持Web Speech API的浏览器，如Chrome、Edge等</p>
+                </div>
+            </div>
+            
+            <!-- 右侧结果面板 -->
+            <div class="right-panel">
+                <div class="panel-title">
+                    📊 识别结果与分析
+                </div>
+                
+                <!-- 统计信息 -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-value" id="totalTests">0</div>
+                        <div class="stat-label">总测试</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="successRate">0%</div>
+                        <div class="stat-label">成功率</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="localCorrections">0</div>
+                        <div class="stat-label">本地纠错</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="aiCorrections">0</div>
+                        <div class="stat-label">AI纠错</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="avgConfidence">0%</div>
+                        <div class="stat-label">平均置信度</div>
+                    </div>
+                </div>
+                
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                    <h3 style="color: #1f2937; font-size: 1.1rem;">识别历史</h3>
+                    <button id="clearResults" class="clear-btn">清空结果</button>
+                </div>
+                
+                <!-- 错误显示 -->
+                <div id="errorDisplay" style="display: none;"></div>
+                
+                <!-- 结果显示区域 -->
+                <div id="resultsContainer" class="results-grid">
+                    <div style="text-align: center; color: #6b7280; padding: 40px;">
+                        <div style="font-size: 3rem; margin-bottom: 16px;">🎯</div>
+                        <p>开始语音识别测试</p>
+                        <p style="font-size: 14px; margin-top: 8px;">点击麦克风或快速测试按钮</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        // 检查浏览器支持
+        const isSupported = 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
+        
+        if (!isSupported) {
+            document.getElementById('supported-content').style.display = 'none';
+            document.getElementById('unsupported-content').style.display = 'block';
+        } else {
+            initializeApp();
+        }
+        
+        function initializeApp() {
+            // 应用状态
+            let isListening = false;
+            let isProcessing = false;
+            let recognition = null;
+            let stats = {
+                totalTests: 0,
+                successfulTests: 0,
+                localCorrections: 0,
+                aiCorrections: 0,
+                totalConfidence: 0
+            };
+            
+            // 本地纠错规则
+            const correctionRules = [
+                { pattern: /勾/g, replacement: 'J', description: '修正J的同音字' },
+                { pattern: /圈/g, replacement: 'Q', description: '修正Q的同音字' },
+                { pattern: /尖/g, replacement: 'A', description: '修正A的同音字' },
+                { pattern: /俺|咱/g, replacement: '我', description: '修正玩家标识' },
+                { pattern: /上家|上手/g, replacement: '上', description: '修正上家标识' },
+                { pattern: /下家|下手/g, replacement: '下', description: '修正下家标识' },
+                { pattern: /对家|对门/g, replacement: '对', description: '修正对家标识' },
+                { pattern: /单张|一张/g, replacement: '单', description: '修正单张指令' },
+                { pattern: /对子|一对/g, replacement: '对', description: '修正对子指令' },
+                { pattern: /三张|三个/g, replacement: '三', description: '修正三张指令' },
+                { pattern: /炸弹/g, replacement: '炸', description: '修正炸弹指令' },
+                { pattern: /不要|要不起|过牌/g, replacement: '过', description: '修正过牌指令' },
+                { pattern: /([我上下对])\1+/g, replacement: '$1', description: '修正重复玩家标识' },
+                { pattern: /([单对三炸过])\1+/g, replacement: '$1', description: '修正重复动作词' },
+                { pattern: /(\d)\1+/g, replacement: '$1', description: '修正重复数字' },
+                { pattern: /[，。！？、]/g, replacement: '', description: '去除标点符号' },
+                { pattern: /\s+/g, replacement: '', description: '去除多余空格' }
+            ];
+            
+            // DOM元素
+            const micButton = document.getElementById('micButton');
+            const statusText = document.getElementById('statusText');
+            const resultsContainer = document.getElementById('resultsContainer');
+            const errorDisplay = document.getElementById('errorDisplay');
+            
+            const strategySelect = document.getElementById('strategy');
+            const enableLocalCheckbox = document.getElementById('enableLocal');
+            const enableRemoteCheckbox = document.getElementById('enableRemote');
+            const localThresholdRange = document.getElementById('localThreshold');
+            const remoteThresholdRange = document.getElementById('remoteThreshold');
+            const apiKeyInput = document.getElementById('apiKey');
+            
+            const localThresholdValue = document.getElementById('localThresholdValue');
+            const remoteThresholdValue = document.getElementById('remoteThresholdValue');
+            
+            const totalTestsEl = document.getElementById('totalTests');
+            const successRateEl = document.getElementById('successRate');
+            const localCorrectionsEl = document.getElementById('localCorrections');
+            const aiCorrectionsEl = document.getElementById('aiCorrections');
+            const avgConfidenceEl = document.getElementById('avgConfidence');
+            
+            const clearResultsBtn = document.getElementById('clearResults');
+            
+            // 初始化语音识别
+            initializeSpeechRecognition();
+            
+            // 事件监听
+            micButton.addEventListener('click', toggleListening);
+            clearResultsBtn.addEventListener('click', clearResults);
+            
+            localThresholdRange.addEventListener('input', (e) => {
+                localThresholdValue.textContent = e.target.value;
+            });
+            
+            remoteThresholdRange.addEventListener('input', (e) => {
+                remoteThresholdValue.textContent = e.target.value;
+            });
+            
+            // 快速测试按钮
+            document.querySelectorAll('.test-cmd').forEach(cmd => {
+                cmd.addEventListener('click', () => {
+                    const text = cmd.getAttribute('data-text');
+                    simulateVoiceResult(text);
+                });
+            });
+            
+            function initializeSpeechRecognition() {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                recognition = new SpeechRecognition();
+                
+                recognition.continuous = false;
+                recognition.interimResults = false;
+                recognition.maxAlternatives = 3;
+                recognition.lang = 'zh-CN';
+                
+                recognition.onstart = () => {
+                    setListening(true);
+                    updateStatus('正在听取语音...', '#3b82f6');
+                    hideError();
+                };
+                
+                recognition.onresult = (event) => {
+                    setListening(false);
+                    setProcessing(true);
+                    updateStatus('正在处理识别结果...', '#f59e0b');
+                    
+                    const results = [];
+                    const confidence = event.results[0]?.[0]?.confidence || 0;
+                    
+                    for (let i = 0; i < (event.results[0]?.length || 0); i++) {
+                        const transcript = event.results[0][i]?.transcript;
+                        if (transcript) {
+                            results.push(transcript.trim());
+                        }
+                    }
+                    
+                    const originalResult = {
+                        text: results[0] || '',
+                        confidence: confidence,
+                        alternatives: results.slice(1)
+                    };
+                    
+                    processVoiceResult(originalResult);
+                };
+                
+                recognition.onerror = (event) => {
+                    setListening(false);
+                    setProcessing(false);
+                    
+                    let errorMessage = '语音识别失败';
+                    switch (event.error) {
+                        case 'no-speech':
+                            errorMessage = '未检测到语音输入，请重试';
+                            break;
+                        case 'audio-capture':
+                            errorMessage = '音频捕获失败，请检查麦克风权限';
+                            break;
+                        case 'not-allowed':
+                            errorMessage = '麦克风权限被拒绝，请允许访问麦克风';
+                            break;
+                        case 'network':
+                            errorMessage = '网络错误，请检查网络连接';
+                            break;
+                    }
+                    
+                    showError(errorMessage);
+                    updateStatus('点击麦克风开始语音识别', '#6b7280');
+                };
+                
+                recognition.onend = () => {
+                    setListening(false);
+                    if (!isProcessing) {
+                        updateStatus('点击麦克风开始语音识别', '#6b7280');
+                    }
+                };
+            }
+            
+            function toggleListening() {
+                if (isListening) {
+                    recognition.stop();
+                } else if (!isProcessing) {
+                    try {
+                        recognition.start();
+                    } catch (error) {
+                        showError('启动语音识别失败: ' + error.message);
+                    }
+                }
+            }
+            
+            function simulateVoiceResult(text) {
+                if (isListening || isProcessing) return;
+                
+                setProcessing(true);
+                updateStatus('正在处理模拟识别结果...', '#f59e0b');
+                
+                const mockResult = {
+                    text: text,
+                    confidence: Math.random() * 0.4 + 0.3, // 0.3-0.7模拟低置信度
+                    alternatives: []
+                };
+                
+                setTimeout(() => {
+                    processVoiceResult(mockResult);
+                }, 500);
+            }
+            
+            async function processVoiceResult(originalResult) {
+                try {
+                    const strategy = strategySelect.value;
+                    const enableLocal = enableLocalCheckbox.checked;
+                    const enableRemote = enableRemoteCheckbox.checked;
+                    const localThreshold = parseFloat(localThresholdRange.value);
+                    const remoteThreshold = parseFloat(remoteThresholdRange.value);
+                    
+                    let enhancedResult = { ...originalResult };
+                    
+                    // 应用本地纠错
+                    if (enableLocal && originalResult.confidence < localThreshold) {
+                        const localResult = applyLocalCorrection(originalResult);
+                        enhancedResult = {
+                            ...enhancedResult,
+                            text: localResult.correctedText,
+                            localCorrected: localResult.hasCorrected,
+                            originalText: originalResult.text,
+                            correctionMethod: 'local',
+                            appliedRules: localResult.appliedRules,
+                            confidence: localResult.confidence
+                        };
+                    }
+                    
+                    // 应用远程AI（模拟）
+                    if (enableRemote && enhancedResult.confidence < remoteThreshold && apiKeyInput.value.trim()) {
+                        // 这里只是模拟，实际应用中需要调用真实的API
+                        const aiResult = await simulateRemoteAI(enhancedResult);
+                        enhancedResult = {
+                            ...enhancedResult,
+                            ...aiResult,
+                            correctionMethod: enhancedResult.localCorrected ? 'local+ai' : 'ai'
+                        };
+                    }
+                    
+                    displayResult(originalResult, enhancedResult);
+                    updateStats(enhancedResult);
+                    
+                    setProcessing(false);
+                    updateStatus('识别完成', '#10b981');
+                    
+                    setTimeout(() => {
+                        updateStatus('点击麦克风开始语音识别', '#6b7280');
+                    }, 2000);
+                    
+                } catch (error) {
+                    console.error('处理语音结果失败:', error);
+                    showError('处理识别结果时发生错误');
+                    setProcessing(false);
+                    updateStatus('点击麦克风开始语音识别', '#6b7280');
+                }
+            }
+            
+            function applyLocalCorrection(result) {
+                let correctedText = result.text;
+                const appliedRules = [];
+                let changesMade = false;
+                
+                for (const rule of correctionRules) {
+                    const originalText = correctedText;
+                    correctedText = correctedText.replace(rule.pattern, rule.replacement);
+                    
+                    if (correctedText !== originalText) {
+                        appliedRules.push(rule.description);
+                        changesMade = true;
+                    }
+                }
+                
+                let confidence = result.confidence;
+                if (changesMade) {
+                    confidence = Math.min(0.95, confidence + 0.1 * Math.min(appliedRules.length, 3));
+                }
+                
+                return {
+                    correctedText,
+                    hasCorrected: changesMade,
+                    appliedRules,
+                    confidence
+                };
+            }
+            
+            async function simulateRemoteAI(result) {
+                // 模拟API调用延迟
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                
+                // 模拟AI纠错
+                const aiCorrections = {
+                    '我单尖': '我单A',
+                    '上对勾': '上对J',
+                    '对三圈': '对三Q',
+                    // 添加更多模拟纠错...
+                };
+                
+                const correctedText = aiCorrections[result.text] || result.text;
+                const hasCorrected = correctedText !== result.text;
+                
+                return {
+                    text: correctedText,
+                    aiCorrected: hasCorrected,
+                    confidence: hasCorrected ? Math.min(0.95, result.confidence + 0.2) : result.confidence
+                };
+            }
+            
+            function displayResult(originalResult, enhancedResult) {
+                const resultCard = document.createElement('div');
+                resultCard.className = 'result-card';
+                
+                const hasCorrection = enhancedResult.localCorrected || enhancedResult.aiCorrected;
+                const confidenceClass = enhancedResult.confidence >= 0.8 ? '#10b981' : 
+                                      enhancedResult.confidence >= 0.6 ? '#f59e0b' : '#ef4444';
+                
+                resultCard.innerHTML = `
+                    <div class="result-header">
+                        <div class="result-title">
+                            ${hasCorrection ? '🔧 ' : '✅ '}识别结果
+                        </div>
+                        <div class="confidence-badge" style="background: ${confidenceClass}">
+                            ${Math.round(enhancedResult.confidence * 100)}%
+                        </div>
+                    </div>
+                    
+                    <div class="result-text">
+                        ${enhancedResult.text}
+                    </div>
+                    
+                    ${enhancedResult.originalText && enhancedResult.originalText !== enhancedResult.text ? `
+                        <div class="result-meta">
+                            原始: ${enhancedResult.originalText}
+                        </div>
+                    ` : ''}
+                    
+                    ${hasCorrection ? `
+                        <div class="correction-info">
+                            <span class="correction-method">${enhancedResult.correctionMethod}</span>
+                            ${enhancedResult.appliedRules ? `
+                                <div style="margin-top: 8px; font-size: 11px; color: #6b7280;">
+                                    规则: ${enhancedResult.appliedRules.join(', ')}
+                                </div>
+                            ` : ''}
+                        </div>
+                    ` : ''}
+                    
+                    <div class="result-meta">
+                        ${new Date().toLocaleTimeString()}
+                    </div>
+                `;
+                
+                // 清空空状态
+                if (resultsContainer.children.length === 1 && 
+                    resultsContainer.children[0].textContent.includes('开始语音识别测试')) {
+                    resultsContainer.innerHTML = '';
+                }
+                
+                resultsContainer.insertBefore(resultCard, resultsContainer.firstChild);
+                
+                // 限制显示数量
+                if (resultsContainer.children.length > 10) {
+                    resultsContainer.removeChild(resultsContainer.lastChild);
+                }
+            }
+            
+            function updateStats(result) {
+                stats.totalTests++;
+                
+                if (isValidCommand(result.text)) {
+                    stats.successfulTests++;
+                }
+                
+                if (result.localCorrected) {
+                    stats.localCorrections++;
+                }
+                
+                if (result.aiCorrected) {
+                    stats.aiCorrections++;
+                }
+                
+                stats.totalConfidence += result.confidence;
+                
+                // 更新显示
+                totalTestsEl.textContent = stats.totalTests;
+                successRateEl.textContent = stats.totalTests > 0 ? 
+                    Math.round((stats.successfulTests / stats.totalTests) * 100) + '%' : '0%';
+                localCorrectionsEl.textContent = stats.localCorrections;
+                aiCorrectionsEl.textContent = stats.aiCorrections;
+                avgConfidenceEl.textContent = stats.totalTests > 0 ? 
+                    Math.round((stats.totalConfidence / stats.totalTests) * 100) + '%' : '0%';
+            }
+            
+            function isValidCommand(text) {
+                const commandPatterns = [
+                    /^[我上下对][单对三炸过]/,
+                    /^[我上下对]王炸$/,
+                    /^[我上下对]顺/,
+                    /^[我上下对]三.+带/,
+                ];
+                
+                return commandPatterns.some(pattern => pattern.test(text));
+            }
+            
+            function clearResults() {
+                resultsContainer.innerHTML = `
+                    <div style="text-align: center; color: #6b7280; padding: 40px;">
+                        <div style="font-size: 3rem; margin-bottom: 16px;">🎯</div>
+                        <p>开始语音识别测试</p>
+                        <p style="font-size: 14px; margin-top: 8px;">点击麦克风或快速测试按钮</p>
+                    </div>
+                `;
+                
+                stats = {
+                    totalTests: 0,
+                    successfulTests: 0,
+                    localCorrections: 0,
+                    aiCorrections: 0,
+                    totalConfidence: 0
+                };
+                
+                updateStats({ confidence: 0 });
+                hideError();
+            }
+            
+            function setListening(listening) {
+                isListening = listening;
+                updateMicButton();
+            }
+            
+            function setProcessing(processing) {
+                isProcessing = processing;
+                updateMicButton();
+            }
+            
+            function updateMicButton() {
+                micButton.className = 'mic-button';
+                
+                if (isListening) {
+                    micButton.classList.add('listening');
+                    micButton.textContent = '🔴';
+                } else if (isProcessing) {
+                    micButton.classList.add('processing');
+                    micButton.textContent = '⏳';
+                } else {
+                    micButton.textContent = '🎤';
+                }
+            }
+            
+            function updateStatus(text, color) {
+                statusText.textContent = text;
+                statusText.style.color = color;
+            }
+            
+            function showError(message) {
+                errorDisplay.style.display = 'block';
+                errorDisplay.innerHTML = `
+                    <div class="error-card">
+                        <div class="error-title">❌ 错误</div>
+                        <div class="error-text">${message}</div>
+                    </div>
+                `;
+            }
+            
+            function hideError() {
+                errorDisplay.style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html>

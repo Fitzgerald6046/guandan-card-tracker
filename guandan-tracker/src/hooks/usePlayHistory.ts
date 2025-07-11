@@ -326,7 +326,18 @@ function generateAIAnalysis(
     estimatedCardCounts,
     keyCardDistribution,
     threatLevels,
-    suggestions
+    suggestions,
+    structureAnalysis: {
+      criticalCardAnalysis: {
+        rankCards: { remaining: 0, distribution: "" },
+        fives: { remaining: 0 },
+        tens: { remaining: 0 }
+      }
+    },
+    warnings: [],
+    strategicInsights: [],
+    recommendations: { immediate: [] },
+    confidence: 0.7
   };
 }
 

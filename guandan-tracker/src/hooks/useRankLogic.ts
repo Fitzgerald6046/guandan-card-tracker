@@ -255,7 +255,7 @@ function analyzeWildCardDistribution(
   });
   
   // 计算集中度 (使用基尼系数概念)
-  const distribution = Object.values(teamPlayers).flat().map(count => count);
+  const distribution = Object.values(teamPlayers).flat().map(record => Object.values(record).reduce((sum, count) => sum + count, 0));
   const totalAssigned = distribution.reduce((sum, count) => sum + count, 0);
   let concentration = 0;
   
@@ -313,8 +313,8 @@ function analyzeKeyCards(
   // 级牌缺失分析
   const rankCards = cards.filter(card => isRankCard(card, currentRank));
   const presentSuits = new Set(rankCards.map(card => card.suit).filter(Boolean));
-  const allSuits = ['spades', 'hearts', 'diamonds', 'clubs'];
-  const missingSuits = allSuits.filter(suit => !presentSuits.has(suit));
+  const allSuits = ['spades', 'hearts', 'diamonds', 'clubs'] as const;
+  const missingSuits = allSuits.filter(suit => !presentSuits.has(suit as any));
   
   const missingImpact = missingSuits.length === 0 ? 'low' :
                        missingSuits.length <= 1 ? 'medium' : 'high';

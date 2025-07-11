@@ -44,7 +44,7 @@ interface ServiceWorkerInfo {
   /** SW是否已注册 */
   isRegistered: boolean;
   /** SW状态 */
-  state: 'installing' | 'waiting' | 'active' | 'redundant' | null;
+  state: 'installing' | 'waiting' | 'active' | 'redundant' | 'activated' | 'activating' | 'installed' | null;
   /** 注册对象 */
   registration: ServiceWorkerRegistration | null;
 }
@@ -399,8 +399,10 @@ export function usePWA(): UsePWAReturn {
     setOffline(prev => ({ ...prev, syncStatus: 'syncing' }));
     
     try {
-      // 触发后台同步
-      await serviceWorker.registration.sync.register('game-data-sync');
+      // 触发后台同步（如果支持）
+      if (serviceWorker.registration && 'sync' in serviceWorker.registration) {
+        await (serviceWorker.registration as any).sync.register('game-data-sync');
+      }
       
       // 模拟同步完成（实际由SW处理）
       setTimeout(() => {
@@ -452,10 +454,12 @@ export function usePWA(): UsePWAReturn {
         }
       };
       
-      navigator.serviceWorker.controller.postMessage(
-        { type: 'GET_CACHE_INFO' },
-        [channel.port2]
-      );
+      if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage(
+          { type: 'GET_CACHE_INFO' },
+          [channel.port2]
+        );
+      }
       
       // 超时处理
       setTimeout(() => resolve({}), 5000);
