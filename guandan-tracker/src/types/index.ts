@@ -189,7 +189,7 @@ export interface UserPreferences {
 // ==================== 事件类型定义 ====================
 
 /** 自定义游戏事件 */
-export interface GameEvent<T = any> {
+export interface GameEvent<T = unknown> {
   type: string;
   payload: T;
   timestamp: number;

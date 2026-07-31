@@ -9,11 +9,8 @@ import type {
   PlayerPosition, 
   Team,
   Suit,
-  Rank,
   PlayRecord,
-  AIAnalysisResult,
   CardConstraint,
-  PassAnalysis,
   BreakingPatternAnalysis
 } from '../types/game';
 import { PlayerPosition as Pos } from '../types/game';
@@ -21,10 +18,8 @@ import {
   isRankCard, 
   isWildCard, 
   isJoker, 
-  getRankName,
-  getCardOrderValue 
+  getRankName
 } from './rankUtils';
-import { TEAM_CONFIG, RANK_DISPLAY_NAMES, SUIT_SYMBOLS } from './constants';
 
 // ==================== 类型定义 ====================
 
@@ -153,6 +148,17 @@ interface CardStatistics {
   };
 }
 
+const GAME_RANKS: GameRank[] = [
+  2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14
+];
+
+const createRankRecord = <T>(
+  createValue: (rank: GameRank) => T
+): Record<GameRank, T> =>
+  Object.fromEntries(
+    GAME_RANKS.map(rank => [rank, createValue(rank)])
+  ) as Record<GameRank, T>;
+
 // ==================== 分析函数 ====================
 
 /**
@@ -194,10 +200,9 @@ export function calculateCardStatistics(
   });
   
   // 按牌面统计
-  const byRank: Record<GameRank, number> = {} as any;
-  for (let rank = 2; rank <= 14; rank++) {
-    byRank[rank as GameRank] = cards.filter(card => card.rank === rank).length;
-  }
+  const byRank = createRankRecord(rank =>
+    cards.filter(card => card.rank === rank).length
+  );
   
   // 计算分布特征
   const playerCounts = [Pos.BOTTOM, Pos.LEFT, Pos.TOP, Pos.RIGHT].map(pos => 
@@ -281,7 +286,7 @@ export function analyzeCriticalCards(
   }
   
   // 炸弹潜力分析
-  const rankGroups: Record<GameRank, Card[]> = {} as any;
+  const rankGroups = createRankRecord<Card[]>(() => []);
   cards.forEach(card => {
     if (card.rank >= 2 && card.rank <= 14) {
       if (!rankGroups[card.rank as GameRank]) {
@@ -314,13 +319,11 @@ export function analyzeCriticalCards(
  * 分析牌型可能性
  */
 export function analyzeCardPatterns(
-  cards: Card[],
-  cardOwnership: Record<string, PlayerPosition>,
-  currentRank: GameRank
+  cards: Card[]
 ): CardPatternAnalysis {
   // 炸弹可能性分析
   const bombPotential: CardPatternAnalysis['bombPotential'] = [];
-  const rankCounts: Record<GameRank, number> = {} as any;
+  const rankCounts = createRankRecord(() => 0);
   
   cards.forEach(card => {
     if (card.rank >= 2 && card.rank <= 14) {
@@ -428,10 +431,20 @@ export function analyzeCardPatterns(
 export function analyzePlayProbabilities(
   cards: Card[],
   cardOwnership: Record<string, PlayerPosition>,
-  currentRank: GameRank,
-  gameStats: any
+  currentRank: GameRank
 ): PlayProbabilityAnalysis {
-  const playerProbabilities: PlayProbabilityAnalysis['playerProbabilities'] = {} as any;
+  const emptyProbability = () => ({
+    initiativeProbability: 0,
+    followProbability: 0,
+    passProbability: 1,
+    expectedStrength: 0
+  });
+  const playerProbabilities: PlayProbabilityAnalysis['playerProbabilities'] = {
+    bottom: emptyProbability(),
+    left: emptyProbability(),
+    top: emptyProbability(),
+    right: emptyProbability()
+  };
   
   // 分析每个玩家的出牌概率
   [Pos.BOTTOM, Pos.LEFT, Pos.TOP, Pos.RIGHT].forEach(position => {
@@ -486,24 +499,36 @@ export function analyzePlayProbabilities(
 export function generateGameReport(
   cards: Card[],
   cardOwnership: Record<string, PlayerPosition>,
-  currentRank: GameRank,
-  gameStats: any
+  currentRank: GameRank
 ): GameReport {
   const timestamp = Date.now();
   const gameProgress = Object.keys(cardOwnership).length / cards.length;
   
   // 分析各个方面
   const criticalCards = analyzeCriticalCards(cards, cardOwnership, currentRank);
-  const patterns = analyzeCardPatterns(cards, cardOwnership, currentRank);
-  const playProbabilities = analyzePlayProbabilities(cards, cardOwnership, currentRank, gameStats);
-  const statistics = calculateCardStatistics(cards, cardOwnership, currentRank);
+  const patterns = analyzeCardPatterns(cards);
+  const playProbabilities = analyzePlayProbabilities(
+    cards,
+    cardOwnership,
+    currentRank
+  );
   
   // 队伍状态评估
-  const teamStatus: GameReport['teamStatus'] = {} as any;
+  const emptyTeamStatus = (): GameReport['teamStatus'][Team] => ({
+    strength: 0,
+    position: 'balanced',
+    keyAdvantages: [],
+    weaknesses: [],
+    winProbability: 0.5
+  });
+  const teamStatus: GameReport['teamStatus'] = {
+    1: emptyTeamStatus(),
+    2: emptyTeamStatus()
+  };
   
   [1, 2].forEach(team => {
     const teamNum = team as Team;
-    const teamPositions = TEAM_CONFIG.TEAM_1_POSITIONS.includes('bottom') ? 
+    const teamPositions = teamNum === 1 ?
       [Pos.BOTTOM, Pos.TOP] : [Pos.LEFT, Pos.RIGHT];
     
     const teamCards = cards.filter(card => {
@@ -643,10 +668,9 @@ export function calculateWinProbability(
 export function exportGameData(
   cards: Card[],
   cardOwnership: Record<string, PlayerPosition>,
-  currentRank: GameRank,
-  gameStats: any
+  currentRank: GameRank
 ): string {
-  const report = generateGameReport(cards, cardOwnership, currentRank, gameStats);
+  const report = generateGameReport(cards, cardOwnership, currentRank);
   const statistics = calculateCardStatistics(cards, cardOwnership, currentRank);
   
   const exportData = {
@@ -698,7 +722,7 @@ export class EnhancedProbabilityEngine {
     });
     
     // 分析每一轮的过牌行为
-    roundRecords.forEach((roundPlays, roundIndex) => {
+    roundRecords.forEach((roundPlays) => {
       const leadingPlay = roundPlays.find(play => play.isActivePlay);
       if (!leadingPlay) return;
       
@@ -732,12 +756,12 @@ export class EnhancedProbabilityEngine {
   analyzeBreakingPatterns(playHistory: PlayRecord[]): BreakingPatternAnalysis[] {
     const breakingAnalyses: BreakingPatternAnalysis[] = [];
     
-    playHistory.forEach((record, index) => {
-      if (this.isUnusualPlay(record, playHistory.slice(0, index))) {
+    playHistory.forEach((record) => {
+      if (this.isUnusualPlay(record)) {
         const analysis: BreakingPatternAnalysis = {
           playerPosition: record.playerPosition,
           brokenPattern: this.inferBrokenPattern(record),
-          reasoning: this.inferBreakingReason(record, playHistory.slice(0, index)),
+          reasoning: this.inferBreakingReason(record),
           revealedInfo: this.analyzeRevealedInfo(record)
         };
         
@@ -754,13 +778,12 @@ export class EnhancedProbabilityEngine {
   analyzeEndgameCards(
     cards: Card[],
     cardOwnership: Record<string, PlayerPosition>,
-    playHistory: PlayRecord[],
-    currentRank: GameRank
+    playHistory: PlayRecord[]
   ): Map<PlayerPosition, Card[]> {
     const playerCards = new Map<PlayerPosition, Card[]>();
     
     // 计算各玩家剩余牌数
-    const remainingCounts = this.calculateRemainingCards(cardOwnership, playHistory);
+    const remainingCounts = this.calculateRemainingCards(playHistory);
     
     // 当玩家剩余牌数 <= 10张时，启用精确推理
     Object.entries(remainingCounts).forEach(([pos, count]) => {
@@ -769,9 +792,8 @@ export class EnhancedProbabilityEngine {
         const inferredCards = this.inferRemainingCards(
           position, 
           cards, 
-          cardOwnership, 
-          playHistory, 
-          currentRank
+          cardOwnership,
+          playHistory
         );
         playerCards.set(position, inferredCards);
       }
@@ -786,8 +808,7 @@ export class EnhancedProbabilityEngine {
   calculateCardProbabilities(
     cards: Card[],
     cardOwnership: Record<string, PlayerPosition>,
-    playHistory: PlayRecord[],
-    currentRank: GameRank
+    playHistory: PlayRecord[]
   ): Record<string, Record<PlayerPosition, number>> {
     const probabilities: Record<string, Record<PlayerPosition, number>> = {};
     
@@ -800,12 +821,8 @@ export class EnhancedProbabilityEngine {
       if (!cardOwnership[card.id]) {
         probabilities[card.id] = this.calculateSingleCardProbability(
           card,
-          cards,
-          cardOwnership,
-          playHistory,
           passConstraints,
-          breakingPatterns,
-          currentRank
+          breakingPatterns
         );
       }
     });
@@ -826,7 +843,7 @@ export class EnhancedProbabilityEngine {
       case 'bomb_five':
       case 'bomb_six':
         // 过炸弹说明没有更大的炸弹或王牌
-        missingRanks.push(15 as any); // 王牌
+        // 王不属于可升级点数，不能写入 GameRank 约束。
         break;
       case 'straight':
         // 过顺子可能缺少相应长度的顺子或炸弹
@@ -842,7 +859,7 @@ export class EnhancedProbabilityEngine {
   /**
    * 检测是否为异常出牌
    */
-  private isUnusualPlay(record: PlayRecord, previousPlays: PlayRecord[]): boolean {
+  private isUnusualPlay(record: PlayRecord): boolean {
     // 检测高价值单牌（可能是拆牌）
     if (record.type === 'single' && record.cards.length === 1) {
       const card = record.cards[0];
@@ -856,17 +873,21 @@ export class EnhancedProbabilityEngine {
   /**
    * 推断被拆掉的牌型
    */
-  private inferBrokenPattern(record: PlayRecord): any {
+  private inferBrokenPattern(
+    record: PlayRecord
+  ): BreakingPatternAnalysis['brokenPattern'] {
     if (record.type === 'single') {
       return 'pair'; // 假设拆了对子
     }
-    return 'unknown';
+    return record.type;
   }
   
   /**
    * 推断拆牌原因
    */
-  private inferBreakingReason(record: PlayRecord, history: PlayRecord[]): 'forced' | 'strategic' | 'defensive' | 'unknown' {
+  private inferBreakingReason(
+    record: PlayRecord
+  ): BreakingPatternAnalysis['reasoning'] {
     // 简化推理：如果是被动出牌，可能是被迫拆牌
     return record.isActivePlay ? 'strategic' : 'forced';
   }
@@ -888,7 +909,6 @@ export class EnhancedProbabilityEngine {
    * 计算各玩家剩余牌数
    */
   private calculateRemainingCards(
-    cardOwnership: Record<string, PlayerPosition>,
     playHistory: PlayRecord[]
   ): Record<PlayerPosition, number> {
     const counts: Record<PlayerPosition, number> = {
@@ -912,8 +932,7 @@ export class EnhancedProbabilityEngine {
     player: PlayerPosition,
     allCards: Card[],
     cardOwnership: Record<string, PlayerPosition>,
-    playHistory: PlayRecord[],
-    currentRank: GameRank
+    playHistory: PlayRecord[]
   ): Card[] {
     // 获取该玩家已确认拥有的牌
     const ownedCards = allCards.filter(card => cardOwnership[card.id] === player);
@@ -936,12 +955,8 @@ export class EnhancedProbabilityEngine {
    */
   private calculateSingleCardProbability(
     card: Card,
-    allCards: Card[],
-    cardOwnership: Record<string, PlayerPosition>,
-    playHistory: PlayRecord[],
     passConstraints: Map<PlayerPosition, CardConstraint[]>,
-    breakingPatterns: BreakingPatternAnalysis[],
-    currentRank: GameRank
+    breakingPatterns: BreakingPatternAnalysis[]
   ): Record<PlayerPosition, number> {
     // 基础均匀分布
     const baseProbability = 0.25; // 四个玩家均分

@@ -1,477 +1,460 @@
 /**
- * 语音控制组件
- * 集成AI增强语音识别功能
+ * 移动端连续语音记牌。
+ * 浏览器每次只识别一句，组件在句末自动重启，从而兼顾移动端稳定性与连续操作。
  */
 
-import React, { useState, useEffect, useRef } from 'react';
-import { usePlayHistory } from '../hooks/usePlayHistory';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  getVoiceCommandKey,
+  parseVoiceTranscript,
+  type VoiceCommandAction,
+  type VoiceCommandOutcome
+} from '../utils/voiceCommand';
 
-// 语音识别相关类型定义
-interface VoiceRecognitionResult {
+interface VoiceRecognitionCandidate {
   text: string;
   confidence: number;
-  alternatives?: string[];
+  index: number;
 }
 
-interface HybridResult extends VoiceRecognitionResult {
-  localCorrected?: boolean;
-  aiCorrected?: boolean;
-  originalText?: string;
-  correctionMethod?: string;
-  appliedRules?: string[];
+interface VoiceRecognitionDisplay {
+  text: string;
+  normalizedText: string;
+  confidence: number;
 }
 
-interface VoiceConfig {
-  synonymMap: Record<string, string[]>;
-  cardMap: Record<string, string>;
-  playerMap: Record<string, string>;
+interface SpeechRecognitionAlternativeLike {
+  transcript?: string;
+  confidence?: number;
 }
+
+interface SpeechRecognitionResultLike {
+  length: number;
+  [index: number]: SpeechRecognitionAlternativeLike;
+}
+
+interface SpeechRecognitionEventLike {
+  resultIndex?: number;
+  results?: {
+    [index: number]: SpeechRecognitionResultLike;
+  };
+}
+
+interface SpeechRecognitionErrorEventLike {
+  error: string;
+}
+
+interface SpeechRecognitionLike {
+  continuous: boolean;
+  interimResults: boolean;
+  maxAlternatives: number;
+  lang: string;
+  onstart: (() => void) | null;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+}
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 
 interface VoiceControlProps {
-  onVoiceCommand?: (command: any) => void;
+  onVoiceCommand?: (
+    command: VoiceCommandAction
+  ) => VoiceCommandOutcome | void;
   className?: string;
   disabled?: boolean;
 }
 
-// 本地AI纠错规则
-const correctionRules = [
-  { pattern: /勾/g, replacement: 'J', description: '修正J的同音字' },
-  { pattern: /圈/g, replacement: 'Q', description: '修正Q的同音字' },
-  { pattern: /尖/g, replacement: 'A', description: '修正A的同音字' },
-  { pattern: /俺|咱/g, replacement: '我', description: '修正玩家标识' },
-  { pattern: /上家|上手/g, replacement: '上', description: '修正上家标识' },
-  { pattern: /下家|下手/g, replacement: '下', description: '修正下家标识' },
-  { pattern: /对家|对门/g, replacement: '对', description: '修正对家标识' },
-  { pattern: /单张|一张/g, replacement: '单', description: '修正单张指令' },
-  { pattern: /对子|一对/g, replacement: '对', description: '修正对子指令' },
-  { pattern: /三张|三个/g, replacement: '三', description: '修正三张指令' },
-  { pattern: /炸弹/g, replacement: '炸', description: '修正炸弹指令' },
-  { pattern: /不要|要不起|过牌/g, replacement: '过', description: '修正过牌指令' },
-  { pattern: /([我上下对])\1+/g, replacement: '$1', description: '修正重复玩家标识' },
-  { pattern: /([单对三炸过])\1+/g, replacement: '$1', description: '修正重复动作词' },
-  { pattern: /(\d)\1+/g, replacement: '$1', description: '修正重复数字' },
-  { pattern: /[，。！？、]/g, replacement: '', description: '去除标点符号' },
-  { pattern: /\s+/g, replacement: '', description: '去除多余空格' }
-];
+const RESTART_DELAY_MS = 280;
+const DUPLICATE_WINDOW_MS = 1400;
+const AMBIGUOUS_CONFIDENCE_GAP = 0.12;
 
 export const VoiceControl: React.FC<VoiceControlProps> = ({
   onVoiceCommand,
   className = '',
   disabled = false
 }) => {
+  const [sessionActive, setSessionActive] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastResult, setLastResult] = useState<HybridResult | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [lastResult, setLastResult] = useState<VoiceRecognitionDisplay | null>(null);
   const [isSupported, setIsSupported] = useState(false);
-  
-  const recognitionRef = useRef<any>(null);
-  const { recordPlay } = usePlayHistory();
 
-  // 检查浏览器支持
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const startRecognitionRef = useRef<() => void>(() => undefined);
+  const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recognitionRunningRef = useRef(false);
+  const sessionActiveRef = useRef(false);
+  const disabledRef = useRef(disabled);
+  const onVoiceCommandRef = useRef(onVoiceCommand);
+  const lastCommandRef = useRef<{ key: string; timestamp: number } | null>(null);
+
+  disabledRef.current = disabled;
+  onVoiceCommandRef.current = onVoiceCommand;
+
   useEffect(() => {
-    const supported = 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
-    setIsSupported(supported);
-    
-    if (supported) {
-      initializeSpeechRecognition();
-    }
-    
-    return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.abort();
-      }
-    };
-  }, []);
-
-  // 初始化语音识别
-  const initializeSpeechRecognition = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setIsSupported(false);
+      return;
+    }
+
+    setIsSupported(true);
     const recognition = new SpeechRecognition();
-    
     recognition.continuous = false;
     recognition.interimResults = false;
     recognition.maxAlternatives = 3;
     recognition.lang = 'zh-CN';
 
-    recognition.onstart = () => {
-      setIsListening(true);
-      setError(null);
+    const clearRestartTimer = () => {
+      if (restartTimerRef.current) {
+        clearTimeout(restartTimerRef.current);
+        restartTimerRef.current = null;
+      }
     };
 
-    recognition.onresult = (event: any) => {
+    const scheduleRestart = (delay = RESTART_DELAY_MS) => {
+      clearRestartTimer();
+      if (!sessionActiveRef.current || disabledRef.current) return;
+      restartTimerRef.current = setTimeout(() => {
+        startRecognitionRef.current();
+      }, delay);
+    };
+
+    const startRecognition = () => {
+      if (
+        !sessionActiveRef.current ||
+        disabledRef.current ||
+        recognitionRunningRef.current
+      ) {
+        return;
+      }
+
+      try {
+        recognition.start();
+      } catch (startError) {
+        const errorName = startError instanceof DOMException ? startError.name : '';
+        if (errorName === 'InvalidStateError') {
+          scheduleRestart(450);
+          return;
+        }
+        setError('启动语音识别失败，请重新开启连续监听');
+        sessionActiveRef.current = false;
+        setSessionActive(false);
+      }
+    };
+    startRecognitionRef.current = startRecognition;
+
+    recognition.onstart = () => {
+      recognitionRunningRef.current = true;
+      setIsListening(true);
+      setIsProcessing(false);
+      setError(null);
+      setNotice('连续监听中，说完后会自动继续');
+    };
+
+    recognition.onresult = (event: SpeechRecognitionEventLike) => {
       setIsListening(false);
       setIsProcessing(true);
-      
-      const results: string[] = [];
-      const confidence = event.results[0]?.[0]?.confidence || 0;
-      
-      for (let i = 0; i < (event.results[0]?.length || 0); i++) {
-        const transcript = event.results[0][i]?.transcript;
-        if (transcript) {
-          results.push(transcript.trim());
+
+      const resultList = event.results?.[event.resultIndex ?? 0] ?? event.results?.[0];
+      const candidates: VoiceRecognitionCandidate[] = [];
+      for (let index = 0; index < (resultList?.length ?? 0); index += 1) {
+        const result = resultList[index];
+        const text = result?.transcript?.trim();
+        if (text) {
+          candidates.push({
+            text,
+            confidence: Number(result.confidence) || 0,
+            index
+          });
         }
       }
 
-      const originalResult: VoiceRecognitionResult = {
-        text: results[0] || '',
-        confidence: confidence,
-        alternatives: results.slice(1)
-      };
+      const parsedCandidates = candidates
+        .map(candidate => ({
+          ...candidate,
+          parsed: parseVoiceTranscript(candidate.text)
+        }))
+        .filter(candidate => candidate.parsed.command);
 
-      // 应用本地AI纠错
-      const enhancedResult = applyLocalCorrection(originalResult);
-      setLastResult(enhancedResult);
-      
-      // 解析并处理命令
-      const command = parseVoiceCommand(enhancedResult.text);
-      if (command) {
-        handleVoiceCommand(command);
+      const primaryCandidate = parsedCandidates.find(candidate => candidate.index === 0);
+      let chosenCandidate = primaryCandidate ?? parsedCandidates[0];
+
+      if (chosenCandidate) {
+        const chosenKey = getVoiceCommandKey(chosenCandidate.parsed.command!);
+        const conflictingCandidate = parsedCandidates.find(candidate => {
+          if (candidate === chosenCandidate) return false;
+          const candidateKey = getVoiceCommandKey(candidate.parsed.command!);
+          if (candidateKey === chosenKey) return false;
+
+          const chosenConfidence = chosenCandidate?.confidence ?? 0;
+          if (chosenConfidence === 0 || candidate.confidence === 0) return true;
+          return chosenConfidence - candidate.confidence < AMBIGUOUS_CONFIDENCE_GAP;
+        });
+
+        if (conflictingCandidate) {
+          const conflictingLabels = [
+            chosenCandidate.parsed.normalizedText,
+            conflictingCandidate.parsed.normalizedText
+          ];
+          setError(`识别结果有歧义：${conflictingLabels.join(' / ')}，本次未记录`);
+          setNotice(null);
+          chosenCandidate = undefined;
+        }
       }
-      
+
+      if (!chosenCandidate) {
+        if (parsedCandidates.length === 0) {
+          const firstCandidate = candidates[0];
+          const firstParsed = firstCandidate
+            ? parseVoiceTranscript(firstCandidate.text)
+            : undefined;
+          setLastResult(firstCandidate ? {
+            text: firstCandidate.text,
+            normalizedText: firstParsed?.normalizedText ?? '',
+            confidence: firstCandidate.confidence
+          } : null);
+          setError(firstParsed?.error ?? '没有听到有效口令，本次未记录');
+          setNotice(null);
+        }
+        setIsProcessing(false);
+        return;
+      }
+
+      const parsedCommand = chosenCandidate.parsed.command!;
+      const now = Date.now();
+      const commandKey = getVoiceCommandKey(parsedCommand);
+      const lastCommand = lastCommandRef.current;
+      const isDuplicate = Boolean(
+        lastCommand &&
+        lastCommand.key === commandKey &&
+        now - lastCommand.timestamp < DUPLICATE_WINDOW_MS
+      );
+
+      setLastResult({
+        text: chosenCandidate.text,
+        normalizedText: chosenCandidate.parsed.normalizedText,
+        confidence: chosenCandidate.confidence
+      });
+
+      if (isDuplicate) {
+        setError(null);
+        setNotice('检测到重复语音，已忽略');
+        setIsProcessing(false);
+        return;
+      }
+
+      const command: VoiceCommandAction = {
+        ...parsedCommand,
+        rawText: chosenCandidate.text,
+        confidence: chosenCandidate.confidence,
+        timestamp: now
+      };
+      let outcome: VoiceCommandOutcome | void;
+      try {
+        outcome = onVoiceCommandRef.current?.(command);
+      } catch (commandError) {
+        console.error('处理语音记牌命令失败:', commandError);
+        setError('命令处理失败，本次未记录');
+        setNotice(null);
+        setIsProcessing(false);
+        return;
+      }
+
+      if (outcome && !outcome.success) {
+        setError(outcome.message);
+        setNotice(null);
+      } else {
+        lastCommandRef.current = { key: commandKey, timestamp: now };
+        setError(null);
+        setNotice(outcome?.message ?? `已记录：${command.normalizedText}`);
+        navigator.vibrate?.(45);
+      }
       setIsProcessing(false);
     };
 
-    recognition.onerror = (event: any) => {
+    recognition.onerror = (event: SpeechRecognitionErrorEventLike) => {
+      recognitionRunningRef.current = false;
       setIsListening(false);
       setIsProcessing(false);
-      
-      let errorMessage = '语音识别失败';
-      switch (event.error) {
-        case 'no-speech':
-          errorMessage = '未检测到语音输入';
-          break;
-        case 'audio-capture':
-          errorMessage = '音频捕获失败，请检查麦克风';
-          break;
-        case 'not-allowed':
-          errorMessage = '没有麦克风权限，请允许访问麦克风';
-          break;
-        case 'network':
-          errorMessage = '网络错误，请检查网络连接';
-          break;
+
+      if (event.error === 'aborted') return;
+      if (event.error === 'no-speech') {
+        setError(null);
+        setNotice('未听清，正在继续监听');
+        return;
       }
-      setError(errorMessage);
+
+      const errorMessages: Record<string, string> = {
+        'audio-capture': '无法使用麦克风，请检查系统麦克风设置',
+        'not-allowed': '没有麦克风权限，请在浏览器设置中允许访问',
+        'service-not-allowed': '浏览器禁止使用语音识别服务',
+        'network': '语音识别网络不可用，请检查网络后重试'
+      };
+      setError(errorMessages[event.error] ?? '语音识别失败，请重新开启');
+      setNotice(null);
+
+      if (['audio-capture', 'not-allowed', 'service-not-allowed', 'network'].includes(event.error)) {
+        sessionActiveRef.current = false;
+        setSessionActive(false);
+      }
     };
 
     recognition.onend = () => {
+      recognitionRunningRef.current = false;
       setIsListening(false);
-      if (isProcessing) {
-        setIsProcessing(false);
-      }
+      setIsProcessing(false);
+      scheduleRestart();
     };
 
     recognitionRef.current = recognition;
-  };
-
-  // 应用本地纠错
-  const applyLocalCorrection = (result: VoiceRecognitionResult): HybridResult => {
-    let correctedText = result.text;
-    const appliedRules: string[] = [];
-    let changesMade = false;
-
-    for (const rule of correctionRules) {
-      const originalText = correctedText;
-      correctedText = correctedText.replace(rule.pattern, rule.replacement);
-      
-      if (correctedText !== originalText) {
-        appliedRules.push(rule.description);
-        changesMade = true;
-      }
-    }
-
-    // 计算纠错后的置信度
-    let confidence = result.confidence;
-    if (changesMade) {
-      confidence = Math.min(0.95, confidence + 0.1 * Math.min(appliedRules.length, 3));
-    }
-
-    return {
-      ...result,
-      text: correctedText,
-      localCorrected: changesMade,
-      originalText: result.text,
-      correctionMethod: changesMade ? 'local' : 'original',
-      appliedRules,
-      confidence
+    return () => {
+      sessionActiveRef.current = false;
+      clearRestartTimer();
+      recognition.onend = null;
+      recognition.abort();
+      recognitionRef.current = null;
+      startRecognitionRef.current = () => undefined;
     };
-  };
+  }, []);
 
-  // 解析语音命令
-  const parseVoiceCommand = (text: string) => {
-    const patterns = [
-      {
-        pattern: /^([我上下对])单([2-9AJQK]|10|小王|大王)$/,
-        type: 'single',
-        parse: (match: RegExpMatchArray) => ({
-          player: match[1],
-          action: 'play',
-          cardType: 'single',
-          card: match[2]
-        })
-      },
-      {
-        pattern: /^([我上下对])对([2-9AJQK]|10)$/,
-        type: 'pair',
-        parse: (match: RegExpMatchArray) => ({
-          player: match[1],
-          action: 'play',
-          cardType: 'pair',
-          card: match[2]
-        })
-      },
-      {
-        pattern: /^([我上下对])三([2-9AJQK]|10)$/,
-        type: 'triple',
-        parse: (match: RegExpMatchArray) => ({
-          player: match[1],
-          action: 'play',
-          cardType: 'triple',
-          card: match[2]
-        })
-      },
-      {
-        pattern: /^([我上下对])三([2-9AJQK]|10)带([2-9AJQK]|10)$/,
-        type: 'triple_with_pair',
-        parse: (match: RegExpMatchArray) => ({
-          player: match[1],
-          action: 'play',
-          cardType: 'triple_with_pair',
-          mainCard: match[2],
-          attachCard: match[3]
-        })
-      },
-      {
-        pattern: /^([我上下对])炸([2-9AJQK]|10)$/,
-        type: 'bomb',
-        parse: (match: RegExpMatchArray) => ({
-          player: match[1],
-          action: 'play',
-          cardType: 'bomb',
-          card: match[2]
-        })
-      },
-      {
-        pattern: /^([我上下对])王炸$/,
-        type: 'joker_bomb',
-        parse: (match: RegExpMatchArray) => ({
-          player: match[1],
-          action: 'play',
-          cardType: 'joker_bomb'
-        })
-      },
-      {
-        pattern: /^([我上下对])过$/,
-        type: 'pass',
-        parse: (match: RegExpMatchArray) => ({
-          player: match[1],
-          action: 'pass'
-        })
-      }
-    ];
+  useEffect(() => {
+    if (!disabled) return;
+    sessionActiveRef.current = false;
+    setSessionActive(false);
+    setIsListening(false);
+    recognitionRef.current?.abort();
+  }, [disabled]);
 
-    for (const { pattern, parse } of patterns) {
-      const match = text.match(pattern);
-      if (match) {
-        return parse(match);
-      }
-    }
-
-    return null;
-  };
-
-  // 处理语音命令
-  const handleVoiceCommand = (command: any) => {
-    try {
-      if (command.action === 'play') {
-        // 转换为游戏记录格式
-        const playAction = {
-          playerPosition: mapPlayerPosition(command.player),
-          cardType: command.cardType,
-          cards: command.card ? [command.card] : [],
-          mainCard: command.mainCard,
-          attachCard: command.attachCard,
-          timestamp: Date.now()
-        };
-        
-        recordPlay(playAction);
-        onVoiceCommand?.(playAction);
-      } else if (command.action === 'pass') {
-        // 记录过牌
-        const passAction = {
-          playerPosition: mapPlayerPosition(command.player),
-          action: 'pass',
-          timestamp: Date.now()
-        };
-        
-        onVoiceCommand?.(passAction);
-      }
-    } catch (error) {
-      console.error('处理语音命令失败:', error);
-      setError('命令处理失败');
-    }
-  };
-
-  // 映射玩家位置
-  const mapPlayerPosition = (player: string) => {
-    const mapping: Record<string, string> = {
-      '我': 'bottom',
-      '上': 'top',
-      '下': 'left',
-      '对': 'right'
-    };
-    return mapping[player] || 'bottom';
-  };
-
-  // 开始录音
-  const startListening = () => {
+  const startContinuousListening = () => {
     if (!recognitionRef.current || disabled) return;
-    
-    try {
-      recognitionRef.current.start();
-    } catch (error) {
-      setError('启动语音识别失败');
-    }
-  };
-
-  // 停止录音
-  const stopListening = () => {
-    if (recognitionRef.current && isListening) {
-      recognitionRef.current.stop();
-    }
-  };
-
-  // 清除错误
-  const clearError = () => {
+    sessionActiveRef.current = true;
+    setSessionActive(true);
     setError(null);
+    setNotice('正在启动连续监听…');
+    startRecognitionRef.current();
+  };
+
+  const stopContinuousListening = () => {
+    sessionActiveRef.current = false;
+    setSessionActive(false);
+    setIsListening(false);
+    setIsProcessing(false);
+    if (restartTimerRef.current) {
+      clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = null;
+    }
+    if (recognitionRunningRef.current) {
+      recognitionRef.current?.stop();
+    }
+    setNotice('连续监听已停止');
   };
 
   if (!isSupported) {
     return (
-      <div className={`p-4 bg-gray-100 rounded-lg ${className}`}>
+      <div className={`rounded-xl bg-gray-100 p-4 ${className}`}>
         <div className="text-center text-gray-500">
-          <div className="text-2xl mb-2">🎤</div>
-          <p className="text-sm">浏览器不支持语音识别</p>
+          <div className="mb-2 text-2xl">🎤</div>
+          <p className="text-sm">当前浏览器不支持语音识别，请使用手机 Chrome 等支持语音识别的浏览器</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className={`p-4 bg-white rounded-lg shadow-md ${className}`}>
-      {/* 标题 */}
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="font-semibold text-gray-800 flex items-center">
-          <span className="text-xl mr-2">🎤</span>
-          语音控制
+    <div className={`rounded-xl bg-white p-3 shadow-md sm:p-4 ${className}`}>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="flex items-center font-semibold text-gray-800">
+          <span className="mr-2 text-xl">🎤</span>
+          连续语音记牌
         </h3>
-        <div className="text-xs text-gray-500">
-          AI增强识别
-        </div>
+        <span className={`rounded-full px-2 py-1 text-xs font-medium ${
+          sessionActive
+            ? 'bg-emerald-100 text-emerald-700'
+            : 'bg-gray-100 text-gray-500'
+        }`}>
+          {sessionActive ? '已开启' : '未开启'}
+        </span>
       </div>
 
-      {/* 控制按钮 */}
-      <div className="flex justify-center mb-4">
-        <button
-          onClick={isListening ? stopListening : startListening}
-          disabled={disabled || isProcessing}
-          className={`
-            w-16 h-16 rounded-full flex items-center justify-center text-white font-bold text-xl
-            transition-all duration-200 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed
-            ${isListening 
-              ? 'bg-red-500 hover:bg-red-600 animate-pulse' 
-              : isProcessing 
-                ? 'bg-yellow-500' 
-                : 'bg-blue-500 hover:bg-blue-600'
-            }
-          `}
-        >
-          {isListening ? '🔴' : isProcessing ? '⏳' : '🎤'}
-        </button>
-      </div>
+      <button
+        type="button"
+        onClick={sessionActive ? stopContinuousListening : startContinuousListening}
+        disabled={disabled}
+        aria-pressed={sessionActive}
+        className={`flex min-h-14 w-full items-center justify-center rounded-xl px-4 text-base font-bold text-white shadow-sm transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 ${
+          sessionActive
+            ? 'bg-red-500 hover:bg-red-600'
+            : 'bg-blue-600 hover:bg-blue-700'
+        }`}
+      >
+        <span className="mr-2 text-xl">
+          {isProcessing ? '⏳' : isListening ? '🔴' : sessionActive ? '⏹️' : '🎤'}
+        </span>
+        {disabled
+          ? '开始游戏后可用'
+          : sessionActive
+            ? '停止连续监听'
+            : '点击一次，开始连续监听'}
+      </button>
 
-      {/* 状态显示 */}
-      <div className="text-center mb-4">
+      <div className="mt-3 min-h-6 text-center text-sm">
         {isListening && (
-          <p className="text-blue-600 text-sm animate-pulse">
-            正在听取语音指令...
-          </p>
+          <p className="animate-pulse font-medium text-blue-600">正在听，请说“上家……”</p>
         )}
         {isProcessing && (
-          <p className="text-yellow-600 text-sm">
-            正在处理语音识别结果...
-          </p>
+          <p className="font-medium text-amber-600">正在核对牌面…</p>
         )}
-        {!isListening && !isProcessing && !error && (
-          <p className="text-gray-500 text-sm">
-            点击麦克风开始语音识别
-          </p>
+        {!isListening && !isProcessing && notice && (
+          <p className={sessionActive ? 'text-emerald-700' : 'text-gray-500'}>{notice}</p>
+        )}
+        {!isListening && !isProcessing && disabled && (
+          <p className="text-gray-500">完成手牌录入并开始游戏后，即可开启连续监听</p>
+        )}
+        {!isListening && !isProcessing && !disabled && !notice && !error && (
+          <p className="text-gray-500">只识别带玩家位置的短口令，避免牌桌聊天误录</p>
         )}
       </div>
 
-      {/* 错误显示 */}
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center">
-              <span className="text-red-500 mr-2">⚠️</span>
-              <span className="text-red-700 text-sm">{error}</span>
-            </div>
-            <button
-              onClick={clearError}
-              className="text-red-500 hover:text-red-700 text-sm"
-            >
-              ✕
-            </button>
-          </div>
+        <div className="mt-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          ⚠️ {error}
         </div>
       )}
 
-      {/* 最后识别结果 */}
       {lastResult && (
-        <div className="bg-green-50 border border-green-200 rounded-lg p-3">
-          <div className="text-sm">
-            <div className="font-medium text-green-800 mb-1">
-              识别结果: {lastResult.text}
-            </div>
-            <div className="text-green-600 text-xs">
-              置信度: {Math.round(lastResult.confidence * 100)}%
-              {lastResult.localCorrected && (
-                <span className="ml-2 bg-blue-100 text-blue-800 px-1 rounded">
-                  已纠错
-                </span>
-              )}
-            </div>
-            {lastResult.appliedRules && lastResult.appliedRules.length > 0 && (
-              <div className="text-xs text-gray-500 mt-1">
-                应用规则: {lastResult.appliedRules.join(', ')}
-              </div>
-            )}
+        <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm">
+          <div className="font-medium text-emerald-800">
+            {lastResult.text} → {lastResult.normalizedText || '未解析'}
+          </div>
+          <div className="mt-1 text-xs text-emerald-600">
+            {lastResult.confidence > 0
+              ? `语音置信度 ${Math.round(lastResult.confidence * 100)}%`
+              : '浏览器未提供置信度，已按牌型规则校验'}
           </div>
         </div>
       )}
 
-      {/* 使用说明 */}
-      <div className="mt-4 p-3 bg-gray-50 rounded-lg">
-        <h4 className="text-sm font-medium text-gray-700 mb-2">语音指令示例:</h4>
-        <div className="text-xs text-gray-600 space-y-1">
-          <div>• "我单K" - 出单张K</div>
-          <div>• "上对10" - 上家出对10</div>
-          <div>• "对三A带5" - 对家三A带5</div>
-          <div>• "下炸8" - 下家炸8</div>
-          <div>• "我王炸" - 王炸</div>
-          <div>• "上过" - 上家过牌</div>
-        </div>
+      <div className="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
+        <div className="mb-1 font-medium text-slate-700">短口令示例</div>
+        <div>“上家七八九十勾” · “对家过”</div>
+        <div>“下家四个八” · “我三个尖带一对五”</div>
+        <div>说“撤销”可撤回最后一次出牌或过牌</div>
       </div>
     </div>
   );
 };
 
-// 类型声明
 declare global {
   interface Window {
-    SpeechRecognition: any;
-    webkitSpeechRecognition: any;
+    SpeechRecognition?: SpeechRecognitionConstructor;
+    webkitSpeechRecognition?: SpeechRecognitionConstructor;
   }
 }
 

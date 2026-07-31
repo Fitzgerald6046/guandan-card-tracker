@@ -1,6 +1,6 @@
-import React, { createContext, useContext, useReducer, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useReducer, useMemo } from 'react';
 import type { ReactNode } from 'react';
-import type { GameConfig, Player, Card, GameRank, Team, PlayerPosition, GameState as GameStateType, Rank, Suit, GameStatus } from '../types';
+import type { Player, Card, GameRank, Team, PlayerPosition, GameState as GameStateType } from '../types';
 import { generateDoubleDeck, markLevelCards, shuffleCards, dealCards, sortCardsByLevel } from '../utils/cardUtils';
 import { countRankCards } from '../utils/rankUtils';
 
@@ -40,7 +40,7 @@ type AppAction =
   | { type: 'SET_ORIENTATION'; payload: { orientation: 'portrait' | 'landscape' } }
   | { type: 'SET_DEVICE_TYPE'; payload: { deviceType: 'mobile' | 'tablet' | 'desktop' } }
   | { type: 'UPDATE_PREFERENCES'; payload: { preferences: Partial<AppState['preferences']> } }
-  | { type: 'RESET_GAME'; payload?: {} };
+  | { type: 'RESET_GAME'; payload?: never };
 
 // 初始状态
 const initialGameState: GameStateType = {

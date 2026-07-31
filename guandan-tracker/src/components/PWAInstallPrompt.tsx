@@ -373,21 +373,3 @@ export const PWAInstallPrompt: React.FC<PWAInstallPromptProps> = ({
 };
 
 export default PWAInstallPrompt;
-
-// 添加动画样式
-const styles = `
-@keyframes slide-up {
-  from {
-    transform: translateY(100%);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-.animate-slide-up {
-  animation: slide-up 0.3s ease-out;
-}
-`;

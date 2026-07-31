@@ -179,7 +179,7 @@ export const DataExport: React.FC<DataExportProps> = ({
       } else {
         setImportStatus({ type: 'error', message: '导入失败，数据格式不正确' });
       }
-    } catch (error) {
+    } catch {
       setImportStatus({ type: 'error', message: '导入失败，请检查数据格式' });
     }
   }, [importData, onImport]);

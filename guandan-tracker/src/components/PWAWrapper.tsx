@@ -4,6 +4,10 @@
  */
 
 import React, { useEffect, useState } from 'react';
+import type {
+  NavigatorWithStandalone,
+  WindowWithAnalytics
+} from '../types/pwa';
 import { usePWA } from '../hooks/usePWA';
 import { useResourcePreloader, smartPreload } from '../utils/resourcePreloader';
 import PWAInstallPrompt from './PWAInstallPrompt';
@@ -40,7 +44,7 @@ interface PWAStatus {
 function isPWAMode(): boolean {
   return (
     window.matchMedia('(display-mode: standalone)').matches ||
-    (window.navigator as any).standalone === true ||
+    (window.navigator as NavigatorWithStandalone).standalone === true ||
     document.referrer.includes('android-app://')
   );
 }
@@ -66,6 +70,8 @@ export const PWAWrapper: React.FC<PWAWrapperProps> = ({
   showDebugInfo = process.env.NODE_ENV === 'development'
 }) => {
   const pwa = usePWA();
+  const syncData = pwa.syncData;
+  const serviceWorkerRegistration = pwa.serviceWorker.registration;
   const resourcePreloader = useResourcePreloader();
   
   const [pwaStatus, setPwaStatus] = useState<PWAStatus>({
@@ -84,169 +90,99 @@ export const PWAWrapper: React.FC<PWAWrapperProps> = ({
   });
   
   // ==================== 初始化和清理 ====================
-  
+
   useEffect(() => {
-    // 初始化PWA功能
-    initializePWA();
-    
-    // 设置性能监控
-    setupPerformanceMonitoring();
-    
-    // 设置网络状态监听
-    setupNetworkListener();
-    
-    // 预加载关键资源
-    if (enableResourcePreload) {
-      smartPreload().catch(console.warn);
-    }
-    
-    return () => {
-      // 清理工作
-      console.log('[PWA] Wrapper unmounted');
-    };
-  }, [enableResourcePreload]);
-  
-  // ==================== PWA初始化 ====================
-  
-  const initializePWA = async () => {
-    try {
-      console.log('[PWA] Initializing PWA functionality...');
-      
-      // 检查PWA支持
-      if (!isPWASupported()) {
-        console.warn('[PWA] PWA features not supported');
-        return;
-      }
-      
-      // 设置PWA事件监听
-      setupPWAEventListeners();
-      
-      // 注册推送通知（如果支持）
-      await registerPushNotifications();
-      
-      console.log('[PWA] PWA initialization completed');
-    } catch (error) {
-      console.error('[PWA] Failed to initialize PWA:', error);
-    }
-  };
-  
-  const setupPWAEventListeners = () => {
-    // 监听应用安装事件
-    window.addEventListener('appinstalled', () => {
-      console.log('[PWA] App installed successfully');
+    const handleInstalled = () => {
       setPwaStatus(prev => ({ ...prev, isInstalled: true }));
-      
-      // 发送安装成功事件到分析服务
-      if ('gtag' in window) {
-        (window as any).gtag('event', 'pwa_install', {
-          event_category: 'PWA',
-          event_label: 'Installation Success'
-        });
+      (window as WindowWithAnalytics).gtag?.('event', 'pwa_install', {
+        event_category: 'PWA',
+        event_label: 'Installation Success'
+      });
+    };
+    const updateOnlineStatus = () => {
+      const isOnline = navigator.onLine;
+      setPwaStatus(prev => ({ ...prev, isOnline }));
+      if (isOnline) {
+        void syncData();
       }
-    });
-    
-    // 监听beforeunload事件，保存数据
-    window.addEventListener('beforeunload', () => {
-      // 保存当前状态到本地存储
-      const state = {
-        timestamp: Date.now(),
-        pwaStatus,
-        performanceMetrics
-      };
-      
-      try {
-        sessionStorage.setItem('pwa_session_state', JSON.stringify(state));
-      } catch (error) {
-        console.warn('[PWA] Failed to save session state:', error);
-      }
-    });
-  };
-  
-  // ==================== 推送通知 ====================
-  
-  const registerPushNotifications = async () => {
-    try {
-      if (!('Notification' in window) || !pwa.serviceWorker.registration) {
-        return;
-      }
-      
-      // 请求通知权限
-      const permission = await Notification.requestPermission();
-      
-      if (permission === 'granted') {
-        console.log('[PWA] Notification permission granted');
-        
-        // 注册推送订阅（如果有推送服务）
-        // const subscription = await pwa.serviceWorker.registration.pushManager.subscribe({
-        //   userVisibleOnly: true,
-        //   applicationServerKey: 'YOUR_VAPID_PUBLIC_KEY'
-        // });
-      }
-    } catch (error) {
-      console.warn('[PWA] Failed to register push notifications:', error);
-    }
-  };
-  
-  // ==================== 性能监控 ====================
-  
-  const setupPerformanceMonitoring = () => {
-    // 使用Performance Observer监控关键指标
-    if ('PerformanceObserver' in window) {
-      // 监控页面加载性能
-      const perfObserver = new PerformanceObserver((list) => {
-        const entries = list.getEntries();
-        
-        entries.forEach((entry) => {
-          if (entry.entryType === 'navigation') {
-            const navEntry = entry as PerformanceNavigationTiming;
-            setPerformanceMetrics(prev => ({
-              ...prev,
-              loadTime: navEntry.loadEventEnd - navEntry.loadEventStart
-            }));
-          } else if (entry.entryType === 'paint') {
-            if (entry.name === 'first-contentful-paint') {
+    };
+    const performanceObserver = 'PerformanceObserver' in window
+      ? new PerformanceObserver(list => {
+          list.getEntries().forEach(entry => {
+            if (entry.entryType === 'navigation') {
+              const navigation = entry as PerformanceNavigationTiming;
+              setPerformanceMetrics(prev => ({
+                ...prev,
+                loadTime:
+                  navigation.loadEventEnd - navigation.loadEventStart
+              }));
+            } else if (
+              entry.entryType === 'paint' &&
+              entry.name === 'first-contentful-paint'
+            ) {
               setPerformanceMetrics(prev => ({
                 ...prev,
                 firstContentfulPaint: entry.startTime
               }));
             }
-          }
-        });
-      });
-      
+          });
+        })
+      : null;
+
+    window.addEventListener('appinstalled', handleInstalled);
+    window.addEventListener('online', updateOnlineStatus);
+    window.addEventListener('offline', updateOnlineStatus);
+
+    if (performanceObserver) {
       try {
-        perfObserver.observe({ entryTypes: ['navigation', 'paint'] });
+        performanceObserver.observe({ entryTypes: ['navigation', 'paint'] });
       } catch (error) {
         console.warn('[PWA] Performance monitoring not available:', error);
       }
     }
-    
-    // 监控Core Web Vitals
-    if ('web-vitals' in window) {
-      // 这里可以集成web-vitals库
-      console.log('[PWA] Core Web Vitals monitoring available');
+
+    if (enableResourcePreload) {
+      void smartPreload().catch(console.warn);
     }
-  };
-  
-  // ==================== 网络状态监听 ====================
-  
-  const setupNetworkListener = () => {
-    const updateOnlineStatus = () => {
-      const isOnline = navigator.onLine;
-      setPwaStatus(prev => ({ ...prev, isOnline }));
-      
-      if (isOnline) {
-        console.log('[PWA] Network connection restored');
-        // 网络恢复时触发数据同步
-        pwa.syncData().catch(console.warn);
-      } else {
-        console.log('[PWA] Network connection lost');
+
+    if (
+      isPWASupported() &&
+      'Notification' in window &&
+      serviceWorkerRegistration
+    ) {
+      void Notification.requestPermission().catch(error => {
+        console.warn('[PWA] Notification permission request failed:', error);
+      });
+    }
+
+    return () => {
+      window.removeEventListener('appinstalled', handleInstalled);
+      window.removeEventListener('online', updateOnlineStatus);
+      window.removeEventListener('offline', updateOnlineStatus);
+      performanceObserver?.disconnect();
+    };
+  }, [
+    enableResourcePreload,
+    serviceWorkerRegistration,
+    syncData
+  ]);
+
+  useEffect(() => {
+    const persistSession = () => {
+      try {
+        sessionStorage.setItem('pwa_session_state', JSON.stringify({
+          timestamp: Date.now(),
+          pwaStatus,
+          performanceMetrics
+        }));
+      } catch (error) {
+        console.warn('[PWA] Failed to save session state:', error);
       }
     };
-    
-    window.addEventListener('online', updateOnlineStatus);
-    window.addEventListener('offline', updateOnlineStatus);
-  };
+
+    window.addEventListener('beforeunload', persistSession);
+    return () => window.removeEventListener('beforeunload', persistSession);
+  }, [performanceMetrics, pwaStatus]);
   
   // ==================== 状态更新 ====================
   

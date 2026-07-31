@@ -1,7 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import Card from './Card';
-import type { Card as CardType, GameRank, Team, PlayerPosition, Suit } from '../../types';
-import { Rank } from '../../types/game';
+import type { Card as CardType, GameRank, Team, PlayerPosition } from '../../types';
 import { 
   getCardOrderValue, 
   compareCards, 

@@ -20,22 +20,7 @@ export function BasicUsageExample() {
     selectedPlayer,
     cards,
     stats,
-    gameInfo,
-    
-    // Actions
-    setRank,
-    selectPlayer,
-    toggleCard,
-    batchToggleCards,
-    resetGame,
-    updatePlayer,
-    
-    // 选择器函数
-    getTeamCards,
-    getRankCards,
-    getWildCards,
-    getPlayerCards,
-    getUnassignedCards
+    gameInfo
   } = gameState;
 
   // 基础信息展示
@@ -90,7 +75,6 @@ export function OperationExample() {
     batchToggleCards,
     resetGame,
     updatePlayer,
-    getRankCards,
     getWildCards,
     cards
   } = gameState;
@@ -156,8 +140,6 @@ export function SelectorExample() {
 
   // 先分配一些卡牌用于演示
   const rankCards = getRankCards();
-  const wildCards = getWildCards();
-  
   // 给队伍1分配所有级牌
   if (rankCards.length > 0) {
     batchToggleCards(rankCards.slice(0, 4).map(card => card.id)); // 分配4张给当前玩家

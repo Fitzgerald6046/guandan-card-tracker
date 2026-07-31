@@ -3,7 +3,7 @@
  * 根据标准掼蛋规则实现完整的牌型识别和大小比较
  */
 
-export type CardRank = 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15;
+export type CardRank = 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
 export type PlayerPosition = 'bottom' | 'left' | 'top' | 'right';
 
 export interface Card {
@@ -11,9 +11,9 @@ export interface Card {
   rank: CardRank;
   isRankCard: boolean;
   isWildCard: boolean;
-  isHearts: boolean;
-  suit: string;
-  displayName: string;
+  isHearts?: boolean;
+  suit?: string | null;
+  displayName?: string;
 }
 
 export interface CardType {
@@ -30,9 +30,12 @@ export interface CardType {
  * 按照掼蛋规则：大王 > 小王 > 级牌 > A > K > Q > J > 10 > 9 > 8 > 7 > 6 > 5 > 4 > 3 > 非级牌中最小的
  */
 function getCardWeight(rank: CardRank, currentRank: CardRank): number {
+  if (rank === 16) {
+    return 1010; // 大王
+  }
+
   if (rank === 15) {
-    // 15是王牌，需要区分大小王
-    return 1000; // 这里简化处理，实际应该区分大小王
+    return 1000; // 小王
   }
   
   if (rank === currentRank) {
@@ -53,7 +56,8 @@ function getCardWeight(rank: CardRank, currentRank: CardRank): number {
  * 获取牌在顺子中的序列值（级牌归位为普通牌）
  */
 function getSequenceValue(rank: CardRank, currentRank: CardRank): number {
-  if (rank === 15) return -1; // 王牌不参与顺子
+  void currentRank;
+  if (rank >= 15) return -1; // 王牌不参与顺子
   // 级牌归位为普通牌，可以参与顺子
   // 例如：如果当前级数是7，那么7可以在56789顺子中当作7使用
   return rank;
@@ -74,6 +78,7 @@ function analyzeCards(cards: Card[], currentRank: CardRank): {
   wildCards: number;
   hasKings: boolean;
 } {
+  void currentRank;
   const ranks = new Map<CardRank, number>();
   let wildCards = 0;
   let hasKings = false;
@@ -105,15 +110,16 @@ function isFourKings(cards: Card[]): CardType {
     return { type: 'invalid', description: '不是四大天王', isValid: false };
   }
 
-  const allKings = cards.every(card => card.rank === 15);
-  if (allKings) {
+  const smallJokers = cards.filter(card => card.rank === 15).length;
+  const bigJokers = cards.filter(card => card.rank === 16).length;
+  if (smallJokers === 2 && bigJokers === 2) {
     return {
       type: 'four_kings',
-      description: '四大天王 - 最大的牌',
+      description: '四王炸 - 最大的牌',
       isValid: true,
       cardCount: 4,
       power: 1000,
-      mainRank: 15
+      mainRank: 16
     };
   }
 
@@ -124,6 +130,7 @@ function isFourKings(cards: Card[]): CardType {
  * 检查是否为单牌
  */
 function isSingle(cards: Card[], currentRank: CardRank): CardType {
+  void currentRank;
   if (cards.length === 1) {
     return {
       type: 'single',
@@ -220,7 +227,6 @@ function isTripleWithPair(cards: Card[], currentRank: CardRank): CardType {
   }
 
   const { ranks, wildCards } = analyzeCards(cards, currentRank);
-  const counts = Array.from(ranks.values()).sort((a, b) => b - a);
   
   // 寻找三张和一对的组合
   let tripleRank: CardRank | null = null;
@@ -286,7 +292,7 @@ function isConsecutivePairs(cards: Card[], currentRank: CardRank): CardType {
   }
 
   const { ranks, wildCards } = analyzeCards(cards, currentRank);
-  let pairs: CardRank[] = [];
+  const pairs: CardRank[] = [];
   let remainingWildCards = wildCards;
 
   // 收集所有可能的对子
@@ -351,7 +357,7 @@ function isSteelBoard(cards: Card[], currentRank: CardRank): CardType {
   }
 
   const { ranks, wildCards } = analyzeCards(cards, currentRank);
-  let triples: CardRank[] = [];
+  const triples: CardRank[] = [];
   let remainingWildCards = wildCards;
 
   // 收集所有可能的三张
@@ -407,8 +413,8 @@ function isAirplane(cards: Card[], currentRank: CardRank): CardType {
   }
 
   const { ranks, wildCards } = analyzeCards(cards, currentRank);
-  let triples: CardRank[] = [];
-  let pairs: CardRank[] = [];
+  const triples: CardRank[] = [];
+  const pairs: CardRank[] = [];
   let remainingWildCards = wildCards;
 
   // 先找所有可能的三张
@@ -425,8 +431,8 @@ function isAirplane(cards: Card[], currentRank: CardRank): CardType {
       remainingWildCards -= 2;
     } else if (count >= 4) {
       // 多于3张的可以拆分
-      let fullTriples = Math.floor(count / 3);
-      let remainder = count % 3;
+      const fullTriples = Math.floor(count / 3);
+      const remainder = count % 3;
       
       for (let i = 0; i < fullTriples; i++) {
         triples.push(rank);
@@ -504,58 +510,52 @@ function isAirplane(cards: Card[], currentRank: CardRank): CardType {
  * 检查是否为顺子
  */
 function isStraight(cards: Card[], currentRank: CardRank): CardType {
-  if (cards.length < 5) {
-    return { type: 'invalid', description: '顺子至少需要5张牌', isValid: false };
+  // currentRank 保留在签名中以兼容统一判型接口；顺子里级牌按原点数参与。
+  void currentRank;
+
+  if (cards.length !== 5) {
+    return { type: 'invalid', description: '顺子需要5张牌', isValid: false };
   }
 
-  const { ranks, wildCards } = analyzeCards(cards, currentRank);
-  let values: number[] = [];
+  // 快速记牌模式只记录点数，不记录花色。红心级牌仍可补任意缺口，
+  // 大小王不参与顺子；固定点数重复时也不能误判为顺子。
+  const fixedRanks = cards
+    .filter(card => !card.isWildCard)
+    .map(card => card.rank);
+  const wildCardCount = cards.length - fixedRanks.length;
 
-  // 收集非王牌的序列值（级牌归位）
-  for (const [rank, count] of ranks.entries()) {
-    if (rank === 15) continue; // 王牌不参与顺子
-    
-    const seqValue = getSequenceValue(rank, currentRank);
-    for (let i = 0; i < count; i++) {
-      values.push(seqValue);
-    }
+  if (fixedRanks.some(rank => rank >= 15) || new Set(fixedRanks).size !== fixedRanks.length) {
+    return { type: 'invalid', description: '不是顺子', isValid: false };
   }
 
-  values.sort((a, b) => a - b);
+  const candidateSequences: Array<{ ranks: CardRank[]; highRank: CardRank }> = [
+    { ranks: [14, 2, 3, 4, 5], highRank: 5 }
+  ];
 
-  // 检查是否可以组成顺子（包括A下位的情况）
-  function checkStraight(vals: number[], wilds: number): boolean {
-    if (vals.length + wilds !== cards.length) return false;
-    
-    let needed = 0;
-    for (let i = 1; i < vals.length; i++) {
-      needed += vals[i] - vals[i-1] - 1;
-    }
-    
-    return needed <= wilds;
+  for (let start = 2; start <= 10; start++) {
+    candidateSequences.push({
+      ranks: [start, start + 1, start + 2, start + 3, start + 4] as CardRank[],
+      highRank: (start + 4) as CardRank
+    });
   }
 
-  let isValidStraight = checkStraight(values, wildCards);
+  const matchedSequence = candidateSequences
+    .filter(sequence => {
+      const fixedCardsFit = fixedRanks.every(rank => sequence.ranks.includes(rank));
+      const missingRanks = sequence.ranks.filter(rank => !fixedRanks.includes(rank)).length;
+      return fixedCardsFit && missingRanks === wildCardCount;
+    })
+    .sort((left, right) => right.highRank - left.highRank)[0];
 
-  // 检查A下位的情况（A-2-3-4-5）
-  if (!isValidStraight && values.includes(14)) {
-    const lowAceValues = values.map(v => v === 14 ? 1 : v).sort((a, b) => a - b);
-    isValidStraight = checkStraight(lowAceValues, wildCards);
-  }
-
-  if (isValidStraight) {
-    const maxValue = Math.max(...values);
-    const isFlushStraight = cards.length === 5;
-    
+  if (matchedSequence) {
     return {
-      type: isFlushStraight ? 'flush_straight' : 'straight',
-      description: isFlushStraight ? 
-        `同花顺（${cards.length}张）- 可管5张及以下炸弹` : 
-        `顺子（${cards.length}张）`,
+      type: 'flush_straight',
+      description: '同花顺（按点数自动判定，不区分花色）- 可管5张及以下炸弹',
       isValid: true,
       cardCount: cards.length,
-      power: isFlushStraight ? 80 : 70,
-      mainRank: maxValue as CardRank
+      // 四/五张炸弹分别为90/95，六张炸弹为100。
+      power: 97,
+      mainRank: matchedSequence.highRank
     };
   }
 
@@ -631,19 +631,41 @@ function isBomb(cards: Card[], currentRank: CardRank): CardType {
  * 比较两个牌型的大小
  */
 export function canBeatCardType(myCards: CardType, opponentCards: CardType, currentRank: CardRank = 7): boolean {
-  // 四大天王最大
-  if (myCards.type === 'four_kings') return true;
-  if (opponentCards.type === 'four_kings') return false;
+  if (!myCards.isValid || !opponentCards.isValid) return false;
 
-  // 威力等级比较
+  // 四大天王最大
+  if (opponentCards.type === 'four_kings') return false;
+  if (myCards.type === 'four_kings') return true;
+
+  const myIsPowerType = myCards.type === 'bomb' || myCards.type === 'flush_straight';
+  const opponentIsPowerType = opponentCards.type === 'bomb' ||
+    opponentCards.type === 'flush_straight';
+
+  // 炸弹/同花顺可以跨牌型比较；普通牌只能用相同牌型和张数跟牌。
+  if (myIsPowerType || opponentIsPowerType) {
+    if (!myIsPowerType) return false;
+    if (!opponentIsPowerType) return true;
+
+    const myPower = myCards.power || 0;
+    const opponentPower = opponentCards.power || 0;
+    if (myPower > opponentPower) return true;
+    if (myPower < opponentPower) return false;
+  } else {
+    if (myCards.type !== opponentCards.type) return false;
+    if ((myCards.cardCount || 0) !== (opponentCards.cardCount || 0)) return false;
+  }
+
+  // 同等级、同牌型比较
   const myPower = myCards.power || 0;
   const opponentPower = opponentCards.power || 0;
+  if (myPower !== opponentPower) return myPower > opponentPower;
 
-  if (myPower > opponentPower) return true;
-  if (myPower < opponentPower) return false;
-
-  // 同等级比较
   if (myCards.type === opponentCards.type) {
+    // 顺子/同花顺按序列最高点比较，级牌在顺子中仍回归原点数。
+    if (myCards.type === 'straight' || myCards.type === 'flush_straight') {
+      return (myCards.mainRank || 0) > (opponentCards.mainRank || 0);
+    }
+
     // 炸弹比较张数，张数多的大
     if (myCards.type === 'bomb') {
       if ((myCards.cardCount || 0) !== (opponentCards.cardCount || 0)) {

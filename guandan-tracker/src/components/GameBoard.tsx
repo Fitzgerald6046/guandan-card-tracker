@@ -1,15 +1,15 @@
 import React from 'react';
-import type { GameConfig } from '../types';
+import type { Card, GameConfig } from '../types';
 import { PlayerPosition } from '../types';
 import PlayerHand from './PlayerHand';
 
 interface GameBoardProps {
   gameConfig: GameConfig;
-  onCardClick?: (card: any) => void;
+  onCardClick?: (card: Card) => void;
   onCardTouch?: {
-    onTouchStart: (card: any) => void;
-    onTouchMove: (card: any) => void;
-    onTouchEnd: (card: any) => void;
+    onTouchStart: (card: Card) => void;
+    onTouchMove: (card: Card) => void;
+    onTouchEnd: (card: Card) => void;
   };
 }
 

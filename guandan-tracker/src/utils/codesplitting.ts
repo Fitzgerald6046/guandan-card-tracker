@@ -3,7 +3,7 @@
  * 提供组件和模块的懒加载功能
  */
 
-import React, { Suspense } from 'react';
+import React from 'react';
 
 // ==================== 类型定义 ====================
 
@@ -47,7 +47,6 @@ interface PreloadStrategy {
 
 class CodeSplittingManager {
   private loadedChunks = new Set<string>();
-  private loadingChunks = new Map<string, Promise<any>>();
   private preloadStrategies = new Map<string, PreloadStrategy>();
   private chunkInfo = new Map<string, ChunkInfo>();
   
@@ -134,7 +133,7 @@ function delay(ms: number): Promise<void> {
 /**
  * 带重试的动态导入
  */
-async function importWithRetry<T = any>(
+async function importWithRetry<T = unknown>(
   importFn: () => Promise<T>,
   options: LazyComponentOptions = {}
 ): Promise<T> {
@@ -176,13 +175,25 @@ async function importWithRetry<T = any>(
  */
 function createErrorBoundary(
   ErrorComponent?: React.ComponentType<{ error: Error; retry: () => void }>
-): React.ComponentType<{ children: React.ReactNode; onRetry?: () => void }> {
+): React.ComponentType<{
+  children: React.ReactNode;
+  onRetry?: () => void;
+  onError?: (error: Error) => void;
+}> {
   
   return class ErrorBoundary extends React.Component<
-    { children: React.ReactNode; onRetry?: () => void },
+    {
+      children: React.ReactNode;
+      onRetry?: () => void;
+      onError?: (error: Error) => void;
+    },
     { hasError: boolean; error: Error | null }
   > {
-    constructor(props: any) {
+    constructor(props: {
+      children: React.ReactNode;
+      onRetry?: () => void;
+      onError?: (error: Error) => void;
+    }) {
       super(props);
       this.state = { hasError: false, error: null };
     }
@@ -193,6 +204,7 @@ function createErrorBoundary(
     
     componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
       console.error('Lazy component loading error:', error, errorInfo);
+      this.props.onError?.(error);
     }
     
     handleRetry = () => {
@@ -254,11 +266,11 @@ const DefaultFallback: React.FC = () => React.createElement('div', {
 /**
  * 创建懒加载组件
  */
-export function createLazyComponent<T extends React.ComponentType<any>>(
-  importFn: () => Promise<{ default: T }>,
+export function createLazyComponent<P extends object>(
+  importFn: () => Promise<{ default: React.ComponentType<P> }>,
   chunkName?: string,
   options: LazyComponentOptions = {}
-): React.ComponentType<React.ComponentProps<T> & LoadableComponentProps> {
+): React.ComponentType<P & LoadableComponentProps> {
   
   // 注册chunk信息
   if (chunkName) {
@@ -285,8 +297,7 @@ export function createLazyComponent<T extends React.ComponentType<any>>(
     }
   });
   
-  return React.forwardRef<any, React.ComponentProps<T> & LoadableComponentProps>(
-    (props, ref) => {
+  const LoadableComponent: React.FC<P & LoadableComponentProps> = (props) => {
       const {
         fallback: FallbackComponent,
         errorBoundary: ErrorBoundaryComponent,
@@ -304,22 +315,23 @@ export function createLazyComponent<T extends React.ComponentType<any>>(
         }
       }, [onLoad]);
       
-      return React.createElement(ErrorBoundary, null,
+      return React.createElement(ErrorBoundary, { onError },
         React.createElement(React.Suspense, {
           fallback: React.createElement(Fallback)
-        }, React.createElement(LazyComponent, { ...componentProps, ref }))
+        }, React.createElement(LazyComponent, componentProps as P))
       );
-    }
-  );
+  };
+
+  return LoadableComponent;
 }
 
 /**
  * 预加载组件
  */
-export function preloadComponent(
-  importFn: () => Promise<any>,
+export function preloadComponent<T>(
+  importFn: () => Promise<T>,
   chunkName?: string
-): Promise<any> {
+): Promise<T | undefined> {
   if (chunkName && codeManager.isChunkLoaded(chunkName)) {
     return Promise.resolve();
   }
@@ -330,9 +342,9 @@ export function preloadComponent(
 /**
  * 基于交互预加载
  */
-export function preloadOnInteraction(
+export function preloadOnInteraction<T>(
   element: HTMLElement,
-  importFn: () => Promise<any>,
+  importFn: () => Promise<T>,
   event: 'hover' | 'click' | 'focus' = 'hover',
   delay: number = 0
 ): () => void {
@@ -367,9 +379,9 @@ export function preloadOnInteraction(
 /**
  * 基于Intersection Observer的预加载
  */
-export function preloadOnVisible(
+export function preloadOnVisible<T>(
   element: HTMLElement,
-  importFn: () => Promise<any>,
+  importFn: () => Promise<T>,
   threshold: number = 0.1
 ): () => void {
   if (!window.IntersectionObserver) {
@@ -403,8 +415,8 @@ export function preloadOnVisible(
 /**
  * 空闲时预加载
  */
-export function preloadOnIdle(
-  importFn: () => Promise<any>,
+export function preloadOnIdle<T>(
+  importFn: () => Promise<T>,
   timeout: number = 5000
 ): void {
   if ('requestIdleCallback' in window) {
@@ -421,11 +433,11 @@ export function preloadOnIdle(
 /**
  * 路由级代码分割
  */
-export function createLazyRoute<T extends React.ComponentType<any>>(
-  importFn: () => Promise<{ default: T }>,
+export function createLazyRoute<P extends object>(
+  importFn: () => Promise<{ default: React.ComponentType<P> }>,
   routeName: string,
   preloadStrategy?: PreloadStrategy
-): React.ComponentType<React.ComponentProps<T>> {
+): React.ComponentType<P> {
   
   const LazyRouteComponent = createLazyComponent(importFn, `route-${routeName}`);
   
@@ -439,7 +451,7 @@ export function createLazyRoute<T extends React.ComponentType<any>>(
 /**
  * 模块级代码分割
  */
-export function createLazyModule<T = any>(
+export function createLazyModule<T = unknown>(
   importFn: () => Promise<T>,
   moduleName: string
 ): () => Promise<T> {

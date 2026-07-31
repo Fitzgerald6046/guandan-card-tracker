@@ -8,8 +8,7 @@ import { Suit, Rank } from '../types/game';
 import { 
   GAME_CONFIG, 
   STANDARD_RANK_ORDER,
-  SUIT_ORDER,
-  GUANDAN_SORT_WEIGHTS
+  SUIT_ORDER
 } from './constants';
 import { 
   isRankCard, 

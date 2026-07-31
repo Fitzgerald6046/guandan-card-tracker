@@ -372,10 +372,7 @@ function testCardData() {
     assertEquals(sortedCards.length, 108, 'Sorted array should have same length');
 
     // 验证配牌在最前面
-    const wildCards = sortedCards.filter(card => card.isWildCard);
     const firstWildCardIndex = sortedCards.findIndex(card => card.isWildCard);
-    const lastWildCardIndex = sortedCards.findIndex(card => card.isWildCard && 
-      sortedCards.indexOf(card) === sortedCards.lastIndexOf(card));
     
     assert(firstWildCardIndex >= 0, 'Should find wild cards');
     assert(firstWildCardIndex < 10, 'Wild cards should be near the beginning');

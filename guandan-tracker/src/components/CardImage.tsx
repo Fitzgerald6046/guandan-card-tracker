@@ -10,7 +10,7 @@ import type { GameRank } from '../types/game';
 
 interface CardImageProps {
   /** 卡牌等级 */
-  rank: GameRank | 15; // 15表示王
+  rank: GameRank | 15 | 16; // 15/16分别表示小王和大王
   /** 花色 */
   suit?: 'hearts' | 'diamonds' | 'clubs' | 'spades' | 'joker';
   /** 显示名称 */
@@ -46,8 +46,8 @@ interface CardImageProps {
 /**
  * 获取卡牌显示名称
  */
-function getCardDisplayName(rank: GameRank | 15): string {
-  if (rank === 15) return 'JOKER';
+function getCardDisplayName(rank: GameRank | 15 | 16): string {
+  if (rank >= 15) return 'JOKER';
   if (rank === 11) return 'J';
   if (rank === 12) return 'Q';
   if (rank === 13) return 'K';
@@ -55,31 +55,10 @@ function getCardDisplayName(rank: GameRank | 15): string {
   return rank.toString();
 }
 
-/**
- * 获取花色符号
- */
-function getSuitSymbol(suit: string): string {
-  switch (suit) {
-    case 'hearts': return '♥';
-    case 'diamonds': return '♦';
-    case 'clubs': return '♣';
-    case 'spades': return '♠';
-    default: return '';
-  }
-}
-
-/**
- * 获取花色颜色
- */
-function getSuitColor(suit: string): string {
-  return suit === 'hearts' || suit === 'diamonds' ? '#dc2626' : '#1f2937';
-}
-
 // ==================== 主组件 ====================
 
 export const CardImage: React.FC<CardImageProps> = ({
   rank,
-  suit = 'hearts',
   displayName: propDisplayName,
   isWildCard = false,
   isRankCard = false,
@@ -95,7 +74,7 @@ export const CardImage: React.FC<CardImageProps> = ({
   className = ''
 }) => {
   const displayName = propDisplayName || getCardDisplayName(rank);
-  const isJoker = rank === 15;
+  const isJoker = rank >= 15;
   
   // 根据尺寸设置方形尺寸
   const getSvgSize = () => {

@@ -7,11 +7,13 @@ import { useState, useCallback, useEffect, useMemo } from 'react';
 import type { 
   Card, 
   GameRank, 
+  Player,
   PlayerPosition, 
+  PlayRecord,
   Team 
 } from '../types/game';
 import { STORAGE_KEYS } from '../utils/constants';
-import { generateGameReport, exportGameData } from '../utils/gameAnalytics';
+import { generateGameReport } from '../utils/gameAnalytics';
 import type { GameReport } from '../utils/gameAnalytics';
 
 // ==================== 类型定义 ====================
@@ -20,6 +22,12 @@ import type { GameReport } from '../utils/gameAnalytics';
 interface GameRecord {
   /** 记录ID */
   id: string;
+  /** 对应的真实牌局ID；同一局的实时快照共用此值 */
+  sourceGameId?: string;
+  /** 重要牌局不会被普通历史条数上限淘汰 */
+  isImportant: boolean;
+  /** 最近一次同步快照的时间 */
+  lastUpdatedAt: number;
   /** 游戏时间 */
   timestamp: number;
   /** 游戏时长(秒) */
@@ -39,6 +47,10 @@ interface GameRecord {
   finalCardOwnership: Record<string, PlayerPosition>;
   /** 卡牌数据快照 */
   cardsSnapshot: Card[];
+  /** 按实际发生顺序保存的全部出牌与过牌记录 */
+  playHistory: PlayRecord[];
+  /** 本局首位出牌玩家 */
+  startingPlayerPosition: PlayerPosition;
   
   /** 游戏分析报告 */
   analysisReport: GameReport;
@@ -122,6 +134,38 @@ interface ExportOptions {
   rankFilter?: GameRank[];
 }
 
+interface SaveGameOptions {
+  isCompleted?: boolean;
+  winningTeam?: Team;
+  notes?: string;
+  tags?: string[];
+  /** 指定后对同一条记录执行更新，而不是重复新增。 */
+  recordId?: string;
+  sourceGameId?: string;
+  isImportant?: boolean;
+}
+
+interface GameStateSnapshot {
+  playHistory?: PlayRecord[];
+  currentRound?: { startTime?: number };
+  createdAt?: number;
+  currentPlayerPosition?: PlayerPosition;
+}
+
+interface GameHistoryExport {
+  version: string;
+  exportTimestamp: number;
+  totalRecords: number;
+  gameRecords?: GameRecord[];
+  statistics?: HistoryStatistics;
+  analysisReports?: GameReport[];
+  cardData?: Array<{
+    gameId: string;
+    cards: Card[];
+    ownership: Record<string, PlayerPosition>;
+  }>;
+}
+
 /** Hook返回类型 */
 interface UseGameHistoryReturn {
   /** 游戏记录列表 */
@@ -136,15 +180,12 @@ interface UseGameHistoryReturn {
     cards: Card[],
     cardOwnership: Record<string, PlayerPosition>,
     currentRank: GameRank,
-    players: any[],
-    gameStats: any,
-    options?: {
-      isCompleted?: boolean;
-      winningTeam?: Team;
-      notes?: string;
-      tags?: string[];
-    }
+    players: Player[],
+    gameStats: GameStateSnapshot,
+    options?: SaveGameOptions
   ) => string;
+  /** 设置或取消重要牌局。 */
+  setGameImportant: (gameId: string, important: boolean) => void;
   
   /** 加载游戏记录 */
   loadGameRecord: (gameId: string) => GameRecord | null;
@@ -180,16 +221,40 @@ interface UseGameHistoryReturn {
 const HISTORY_STORAGE_KEY = STORAGE_KEYS.GAME_STATE + '_history';
 const MAX_RECORDS = 10;
 
+const normalizeGameRecord = (record: GameRecord): GameRecord => ({
+  ...record,
+  isImportant: Boolean(record.isImportant),
+  lastUpdatedAt: record.lastUpdatedAt ?? record.timestamp
+});
+
+/**
+ * 重要牌局全部保留；普通牌局只保留最近MAX_RECORDS局。
+ * 复制后排序，避免原实现直接sort导致React状态被原地修改。
+ */
+export const retainGameRecords = (records: GameRecord[]): GameRecord[] => {
+  const sorted = records
+    .map(normalizeGameRecord)
+    .sort((left, right) =>
+      (right.lastUpdatedAt ?? right.timestamp) -
+      (left.lastUpdatedAt ?? left.timestamp)
+    );
+  const importantRecords = sorted.filter(record => record.isImportant);
+  const regularRecords = sorted
+    .filter(record => !record.isImportant)
+    .slice(0, MAX_RECORDS);
+
+  return [...importantRecords, ...regularRecords].sort((left, right) =>
+    Number(right.isImportant) - Number(left.isImportant) ||
+    right.lastUpdatedAt - left.lastUpdatedAt
+  );
+};
+
 /**
  * 保存游戏记录到localStorage
  */
 function saveRecordsToStorage(records: GameRecord[]): void {
   try {
-    // 只保留最近的MAX_RECORDS条记录
-    const limitedRecords = records
-      .sort((a, b) => b.timestamp - a.timestamp)
-      .slice(0, MAX_RECORDS);
-    
+    const limitedRecords = retainGameRecords(records);
     localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(limitedRecords));
   } catch (error) {
     console.warn('Failed to save game records to localStorage:', error);
@@ -205,7 +270,7 @@ function loadRecordsFromStorage(): GameRecord[] {
     if (!saved) return [];
     
     const records = JSON.parse(saved) as GameRecord[];
-    return Array.isArray(records) ? records : [];
+    return Array.isArray(records) ? retainGameRecords(records) : [];
   } catch (error) {
     console.warn('Failed to load game records from localStorage:', error);
     return [];
@@ -222,10 +287,12 @@ function calculateHistoryStatistics(records: GameRecord[]): HistoryStatistics {
   const completedGames = records.filter(r => r.isCompleted).length;
   
   // 按级数统计
-  const gamesByRank: Record<GameRank, number> = {} as any;
-  for (let rank = 2; rank <= 14; rank++) {
-    gamesByRank[rank as GameRank] = records.filter(r => r.currentRank === rank).length;
-  }
+  const gamesByRank = Object.fromEntries(
+    Array.from({ length: 13 }, (_, index) => {
+      const rank = (index + 2) as GameRank;
+      return [rank, records.filter(record => record.currentRank === rank).length];
+    })
+  ) as Record<GameRank, number>;
   
   // 胜率统计
   const completedRecords = records.filter(r => r.isCompleted && r.winningTeam);
@@ -240,13 +307,14 @@ function calculateHistoryStatistics(records: GameRecord[]): HistoryStatistics {
     2: completedRecords.length > 0 ? team2Wins / completedRecords.length : 0
   };
   
-  const winRatesByRank: Record<GameRank, number> = {} as any;
-  for (let rank = 2; rank <= 14; rank++) {
-    const rankGames = completedRecords.filter(r => r.currentRank === rank);
-    const rankWins = rankGames.filter(r => r.winningTeam === 1); // 假设统计队伍1的胜率
-    winRatesByRank[rank as GameRank] = rankGames.length > 0 ? 
-      rankWins.length / rankGames.length : 0;
-  }
+  const winRatesByRank = Object.fromEntries(
+    Array.from({ length: 13 }, (_, index) => {
+      const rank = (index + 2) as GameRank;
+      const rankGames = completedRecords.filter(record => record.currentRank === rank);
+      const rankWins = rankGames.filter(record => record.winningTeam === 1);
+      return [rank, rankGames.length > 0 ? rankWins.length / rankGames.length : 0];
+    })
+  ) as Record<GameRank, number>;
   
   // 平均游戏时长
   const averageGameDuration = completedRecords.length > 0 ?
@@ -333,45 +401,47 @@ export function useGameHistory(): UseGameHistoryReturn {
     cards: Card[],
     cardOwnership: Record<string, PlayerPosition>,
     currentRank: GameRank,
-    players: any[],
-    gameStats: any,
-    options: {
-      isCompleted?: boolean;
-      winningTeam?: Team;
-      notes?: string;
-      tags?: string[];
-    } = {}
+    players: Player[],
+    gameStats: GameStateSnapshot,
+    options: SaveGameOptions = {}
   ) => {
-    const gameId = generateGameId();
-    const timestamp = Date.now();
+    const gameId = options.recordId || generateGameId();
+    const savedAt = Date.now();
+    const playHistory: PlayRecord[] = Array.isArray(gameStats?.playHistory)
+      ? gameStats.playHistory.map((record: PlayRecord) => ({
+          ...record,
+          cards: record.cards.map(card => ({ ...card }))
+        }))
+      : [];
+    const timestamp =
+      gameStats?.currentRound?.startTime ||
+      gameStats?.createdAt ||
+      savedAt;
     
     // 生成分析报告
-    const analysisReport = generateGameReport(cards, cardOwnership, currentRank, gameStats);
+    const analysisReport = generateGameReport(cards, cardOwnership, currentRank);
     
-    // 计算游戏时长 (简化版，实际应该跟踪开始时间)
-    const duration = Math.floor(Math.random() * 1800) + 600; // 10-40分钟随机
-    
-    // 计算游戏结果
-    const team1Cards = cards.filter(card => {
-      const owner = cardOwnership[card.id];
-      return owner && (owner === 'bottom' || owner === 'top');
-    });
-    const team2Cards = cards.filter(card => {
-      const owner = cardOwnership[card.id];
-      return owner && (owner === 'left' || owner === 'right');
-    });
+    const duration = Math.max(0, Math.floor((savedAt - timestamp) / 1000));
     
     const team1Score = analysisReport.teamStatus[1].strength;
     const team2Score = analysisReport.teamStatus[2].strength;
     
     const newRecord: GameRecord = {
       id: gameId,
+      sourceGameId: options.sourceGameId,
+      isImportant: options.isImportant ?? false,
+      lastUpdatedAt: savedAt,
       timestamp,
       duration,
       currentRank,
       players: players.map(p => ({ ...p })),
       finalCardOwnership: { ...cardOwnership },
       cardsSnapshot: cards.map(c => ({ ...c })),
+      playHistory,
+      startingPlayerPosition:
+        playHistory[0]?.playerPosition ||
+        gameStats?.currentPlayerPosition ||
+        'bottom',
       analysisReport,
       winningTeam: options.winningTeam || null,
       gameResult: {
@@ -386,12 +456,44 @@ export function useGameHistory(): UseGameHistoryReturn {
     };
     
     setGameRecords(prev => {
-      const updated = [newRecord, ...prev];
-      // 保持最大记录数
-      return updated.slice(0, MAX_RECORDS);
+      const existing = prev.find(record => record.id === gameId);
+      const mergedRecord: GameRecord = existing
+        ? {
+            ...newRecord,
+            timestamp: existing.timestamp,
+            sourceGameId:
+              options.sourceGameId ?? existing.sourceGameId,
+            isImportant:
+              options.isImportant ?? existing.isImportant
+          }
+        : newRecord;
+      return retainGameRecords([
+        mergedRecord,
+        ...prev.filter(record => record.id !== gameId)
+      ]);
     });
     
     return gameId;
+  }, []);
+
+  const setGameImportant = useCallback((
+    gameId: string,
+    important: boolean
+  ) => {
+    setGameRecords(previous =>
+      retainGameRecords(previous.map(record =>
+        record.id === gameId
+          ? {
+              ...record,
+              isImportant: important,
+              lastUpdatedAt: Date.now(),
+              tags: important
+                ? [...new Set([...record.tags, '重要牌局'])]
+                : record.tags.filter(tag => tag !== '重要牌局')
+            }
+          : record
+      ))
+    );
   }, []);
   
   // 加载游戏记录
@@ -417,16 +519,13 @@ export function useGameHistory(): UseGameHistoryReturn {
   
   // 开始回放
   const startReplay = useCallback((gameId: string) => {
-    const record = gameRecords.find(r => r.id === gameId);
-    if (record) {
-      setReplayState({
-        currentGameId: gameId,
-        isReplayMode: true,
-        replayProgress: 0,
-        replaySpeed: 1
-      });
-    }
-  }, [gameRecords]);
+    setReplayState({
+      currentGameId: gameId,
+      isReplayMode: true,
+      replayProgress: 0,
+      replaySpeed: 1
+    });
+  }, []);
   
   // 停止回放
   const stopReplay = useCallback(() => {
@@ -473,7 +572,7 @@ export function useGameHistory(): UseGameHistoryReturn {
       );
     }
     
-    const exportObj: any = {
+    const exportObj: GameHistoryExport = {
       version: '1.0',
       exportTimestamp: Date.now(),
       totalRecords: filteredRecords.length
@@ -531,13 +630,13 @@ export function useGameHistory(): UseGameHistoryReturn {
       if (importObj.gameRecords && Array.isArray(importObj.gameRecords)) {
         // 合并导入的记录，避免重复
         const existingIds = new Set(gameRecords.map(r => r.id));
-        const newRecords = importObj.gameRecords.filter((r: GameRecord) => 
-          !existingIds.has(r.id)
-        );
+        const newRecords = importObj.gameRecords
+          .filter((r: GameRecord) => !existingIds.has(r.id))
+          .map(normalizeGameRecord);
         
         setGameRecords(prev => {
           const combined = [...newRecords, ...prev];
-          return combined.slice(0, MAX_RECORDS);
+          return retainGameRecords(combined);
         });
         
         return true;
@@ -576,6 +675,7 @@ export function useGameHistory(): UseGameHistoryReturn {
     statistics,
     replayState,
     saveCurrentGame,
+    setGameImportant,
     loadGameRecord,
     deleteGameRecord,
     clearAllRecords,
@@ -597,5 +697,6 @@ export type {
   HistoryStatistics, 
   ReplayState, 
   ExportOptions,
+  SaveGameOptions,
   UseGameHistoryReturn 
 };

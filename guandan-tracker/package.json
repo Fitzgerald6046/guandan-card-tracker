@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:inference": "esbuild scripts/inference-calibration.ts --bundle --platform=node --format=esm --outfile=node_modules/.tmp/inference-calibration.mjs && node node_modules/.tmp/inference-calibration.mjs",
+    "test:history": "esbuild scripts/game-history-retention-test.ts --bundle --platform=node --format=esm --define:import.meta.env.DEV=false --outfile=node_modules/.tmp/game-history-retention-test.mjs && node node_modules/.tmp/game-history-retention-test.mjs"
   },
   "dependencies": {
     "react": "^19.1.0",

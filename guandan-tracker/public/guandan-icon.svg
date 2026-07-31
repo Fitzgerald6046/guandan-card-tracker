@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="掼蛋记牌器">
+  <rect width="512" height="512" rx="112" fill="#1d4ed8"/>
+  <g transform="translate(112 78) rotate(-8 144 178)">
+    <rect x="20" y="18" width="244" height="324" rx="30" fill="#bfdbfe" opacity=".5"/>
+    <rect x="0" y="0" width="244" height="324" rx="30" fill="#fff"/>
+    <path d="M52 56c-21-28-62 4-36 30l36 36 36-36c26-26-15-58-36-30Z" fill="#ef4444"/>
+    <path d="M192 268c21 28 62-4 36-30l-36-36-36 36c-26 26 15 58 36 30Z" fill="#ef4444"/>
+    <g fill="#1d4ed8">
+      <rect x="54" y="148" width="136" height="18" rx="9"/>
+      <rect x="54" y="188" width="102" height="18" rx="9"/>
+      <circle cx="184" cy="197" r="13"/>
+    </g>
+  </g>
+</svg>

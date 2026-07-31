@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import Settings from './Settings';
+import type { SettingsSnapshot } from './Settings';
 
 /**
  * Settings组件演示页面
@@ -7,9 +8,13 @@ import Settings from './Settings';
  */
 const SettingsDemo: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
-  const [settingsHistory, setSettingsHistory] = useState<any[]>([]);
+  const [settingsHistory, setSettingsHistory] = useState<Array<{
+    timestamp: string;
+    settings: SettingsSnapshot;
+    action: string;
+  }>>([]);
 
-  const handleSettingsChange = (settings: any) => {
+  const handleSettingsChange = (settings: SettingsSnapshot) => {
     console.log('设置已更新:', settings);
     
     // 记录设置变更历史
@@ -20,81 +25,6 @@ const SettingsDemo: React.FC = () => {
     };
     
     setSettingsHistory(prev => [historyEntry, ...prev.slice(0, 4)]);
-  };
-
-  const demoGameState = {
-    gameState: {
-      gameId: 'demo-game-123',
-      status: 'playing' as const,
-      currentRank: 7,
-      players: [
-        {
-          id: 'player-1',
-          name: '演示玩家1',
-          position: 'bottom' as const,
-          team: 1 as const,
-          cards: [],
-          remainingCount: 13,
-          isCurrentPlayer: true,
-          stats: {
-            playedCards: 0,
-            rankCardCount: 2,
-            wildCardCount: 1,
-            roundWins: 0
-          }
-        },
-        {
-          id: 'player-2',
-          name: '演示玩家2',
-          position: 'left' as const,
-          team: 2 as const,
-          cards: [],
-          remainingCount: 13,
-          isCurrentPlayer: false,
-          stats: {
-            playedCards: 0,
-            rankCardCount: 1,
-            wildCardCount: 0,
-            roundWins: 1
-          }
-        }
-      ],
-      allCards: [],
-      config: {
-        rank: {
-          current: 7,
-          next: 8,
-          history: [6]
-        },
-        tributeEnabled: false
-      },
-      playHistory: [],
-      currentRound: {
-        roundNumber: 1,
-        startTime: Date.now(),
-        passCount: 0,
-        isFinished: false
-      },
-      currentPlayerPosition: 'bottom' as const,
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    },
-    ui: {
-      selectedPlayer: null,
-      showRankSelector: false,
-      showSettings: showSettings,
-      isLoading: false,
-      error: null,
-      orientation: 'portrait' as const,
-      deviceType: 'desktop' as const
-    },
-    preferences: {
-      enableKeyboardShortcuts: true,
-      showDetailedStats: true,
-      showTeamScores: true,
-      autoSaveEnabled: true,
-      theme: 'auto' as const
-    }
   };
 
   return (
@@ -310,4 +240,4 @@ function GameApp() {
   );
 };
 
-export default SettingsDemo; 
+export default SettingsDemo;

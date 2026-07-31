@@ -108,7 +108,7 @@ export const PWAUpdateBanner: React.FC<PWAUpdateBannerProps> = ({
     try {
       await onUpdate();
       showBanner('success', '更新完成！应用将自动重启', true);
-    } catch (error) {
+    } catch {
       showBanner('error', '更新失败，请重试', true);
     } finally {
       setIsUpdating(false);
@@ -124,7 +124,7 @@ export const PWAUpdateBanner: React.FC<PWAUpdateBannerProps> = ({
       if (!updateInfo.hasUpdate) {
         showBanner('success', '您已使用最新版本', true);
       }
-    } catch (error) {
+    } catch {
       showBanner('error', '检查更新失败', true);
     }
   };
@@ -134,7 +134,7 @@ export const PWAUpdateBanner: React.FC<PWAUpdateBannerProps> = ({
     try {
       await onClearCache();
       showBanner('success', '缓存已清理，建议刷新页面', true);
-    } catch (error) {
+    } catch {
       showBanner('error', '清理缓存失败', true);
     }
   };

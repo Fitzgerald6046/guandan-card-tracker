@@ -53,13 +53,21 @@ interface DataManagement {
   exportFormat: 'json' | 'csv' | 'txt';
 }
 
+export interface SettingsSnapshot {
+  initialRank: GameRank;
+  teamAssignment: TeamAssignment;
+  gameRules: GameRules;
+  displaySettings: DisplaySettings;
+  dataManagement: DataManagement;
+}
+
 interface SettingsProps {
   /** 是否显示设置面板 */
   isOpen: boolean;
   /** 关闭设置面板回调 */
   onClose: () => void;
   /** 设置变更回调 */
-  onSettingsChange?: (settings: any) => void;
+  onSettingsChange?: (settings: SettingsSnapshot) => void;
 }
 
 const Settings: React.FC<SettingsProps> = ({
@@ -165,7 +173,11 @@ const Settings: React.FC<SettingsProps> = ({
   ];
 
   // 更新队伍分配
-  const updateTeamAssignment = useCallback((playerKey: keyof TeamAssignment, field: keyof TeamAssignment['player1'], value: any) => {
+  const updateTeamAssignment = useCallback(<K extends keyof TeamAssignment['player1'],>(
+    playerKey: keyof TeamAssignment,
+    field: K,
+    value: TeamAssignment['player1'][K]
+  ) => {
     setTeamAssignment(prev => ({
       ...prev,
       [playerKey]: {
@@ -176,7 +188,10 @@ const Settings: React.FC<SettingsProps> = ({
   }, []);
 
   // 更新游戏规则
-  const updateGameRules = useCallback((field: keyof GameRules, value: any) => {
+  const updateGameRules = useCallback(<K extends keyof GameRules,>(
+    field: K,
+    value: GameRules[K]
+  ) => {
     setGameRules(prev => ({
       ...prev,
       [field]: value
@@ -184,7 +199,10 @@ const Settings: React.FC<SettingsProps> = ({
   }, []);
 
   // 更新显示设置
-  const updateDisplaySettings = useCallback((field: keyof DisplaySettings, value: any) => {
+  const updateDisplaySettings = useCallback(<K extends keyof DisplaySettings,>(
+    field: K,
+    value: DisplaySettings[K]
+  ) => {
     setDisplaySettings(prev => ({
       ...prev,
       [field]: value
@@ -192,7 +210,10 @@ const Settings: React.FC<SettingsProps> = ({
   }, []);
 
   // 更新数据管理设置
-  const updateDataManagement = useCallback((field: keyof DataManagement, value: any) => {
+  const updateDataManagement = useCallback(<K extends keyof DataManagement,>(
+    field: K,
+    value: DataManagement[K]
+  ) => {
     setDataManagement(prev => ({
       ...prev,
       [field]: value
@@ -957,4 +978,4 @@ const Settings: React.FC<SettingsProps> = ({
   );
 };
 
-export default Settings; 
+export default Settings;

@@ -29,7 +29,6 @@ const Card: React.FC<CardProps> = ({
   card,
   size = 'medium',
   ownerTeam,
-  ownerPosition,
   owners,
   animated = true,
   className = '',
@@ -277,4 +276,4 @@ const Card: React.FC<CardProps> = ({
   );
 };
 
-export default Card; 
+export default Card;

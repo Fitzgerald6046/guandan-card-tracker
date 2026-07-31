@@ -64,6 +64,31 @@ interface NetworkInfo {
   saveData: boolean;
 }
 
+interface NetworkConnection extends EventTarget {
+  effectiveType?: string;
+  downlink?: number;
+  rtt?: number;
+  saveData?: boolean;
+}
+
+interface BatteryInfo {
+  level: number;
+  charging: boolean;
+}
+
+interface NavigatorWithDeviceInfo extends Navigator {
+  connection?: NetworkConnection;
+  getBattery?: () => Promise<BatteryInfo>;
+}
+
+type PreloadedResource =
+  | HTMLImageElement
+  | HTMLScriptElement
+  | HTMLLinkElement
+  | FontFace
+  | HTMLMediaElement
+  | Response;
+
 // ==================== 缓存管理 ====================
 
 class ResourceCacheManager {
@@ -185,7 +210,8 @@ class NetworkMonitor {
    */
   private updateNetworkInfo(): void {
     if ('connection' in navigator) {
-      const connection = (navigator as any).connection;
+      const connection = (navigator as NavigatorWithDeviceInfo).connection;
+      if (!connection) return;
       this.networkInfo = {
         effectiveType: connection.effectiveType || 'unknown',
         downlink: connection.downlink || 0,
@@ -200,7 +226,8 @@ class NetworkMonitor {
    */
   private setupNetworkListener(): void {
     if ('connection' in navigator) {
-      const connection = (navigator as any).connection;
+      const connection = (navigator as NavigatorWithDeviceInfo).connection;
+      if (!connection) return;
       connection.addEventListener('change', () => {
         this.updateNetworkInfo();
       });
@@ -248,7 +275,7 @@ class NetworkMonitor {
 // ==================== 电池状态检测 ====================
 
 class BatteryMonitor {
-  private batteryInfo: any = null;
+  private batteryInfo: BatteryInfo | null = null;
   
   constructor() {
     this.initBatteryAPI();
@@ -259,8 +286,9 @@ class BatteryMonitor {
    */
   private async initBatteryAPI(): Promise<void> {
     try {
-      if ('getBattery' in navigator) {
-        this.batteryInfo = await (navigator as any).getBattery();
+      const getBattery = (navigator as NavigatorWithDeviceInfo).getBattery;
+      if (getBattery) {
+        this.batteryInfo = await getBattery.call(navigator);
       }
     } catch (error) {
       console.warn('Battery API not available:', error);
@@ -285,7 +313,7 @@ class BatteryMonitor {
   /**
    * 获取电池信息
    */
-  getBatteryInfo(): any {
+  getBatteryInfo(): BatteryInfo | null {
     return this.batteryInfo;
   }
 }
@@ -377,10 +405,11 @@ class ResourcePreloader {
     timeout: number,
     useServiceWorkerCache: boolean
   ): Promise<PreloadResult> {
+    void useServiceWorkerCache;
     const startTime = performance.now();
     
     try {
-      let loadPromise: Promise<any>;
+      let loadPromise: Promise<PreloadedResource>;
       
       switch (resource.type) {
         case 'image':
@@ -404,7 +433,7 @@ class ResourcePreloader {
       }
       
       // 添加超时控制
-      const timeoutPromise = new Promise((_, reject) => {
+      const timeoutPromise = new Promise<never>((_, reject) => {
         setTimeout(() => reject(new Error('Preload timeout')), timeout);
       });
       
@@ -560,7 +589,10 @@ class ResourcePreloader {
   /**
    * 估算资源大小
    */
-  private estimateResourceSize(resource: PreloadResource, result: any): number {
+  private estimateResourceSize(
+    resource: PreloadResource,
+    result: PreloadedResource
+  ): number {
     // 尝试从响应头获取大小
     if (result instanceof Response) {
       const contentLength = result.headers.get('content-length');

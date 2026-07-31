@@ -4,6 +4,11 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import type {
+  BeforeInstallPromptEvent,
+  NavigatorWithStandalone,
+  ServiceWorkerRegistrationWithSync
+} from '../types/pwa';
 
 // ==================== 类型定义 ====================
 
@@ -15,7 +20,7 @@ interface PWAInstallPrompt {
   /** 是否可以安装 */
   canInstall: boolean;
   /** 安装事件 */
-  deferredPrompt: any;
+  deferredPrompt: BeforeInstallPromptEvent | null;
 }
 
 interface PWAUpdateInfo {
@@ -98,38 +103,9 @@ function detectPlatform(): PWAInstallPrompt['platform'] {
 function isStandalone(): boolean {
   return (
     window.matchMedia('(display-mode: standalone)').matches ||
-    (window.navigator as any).standalone === true ||
+    (window.navigator as NavigatorWithStandalone).standalone === true ||
     document.referrer.includes('android-app://')
   );
-}
-
-/**
- * 保存数据到本地存储（用于离线同步）
- */
-function saveToOfflineStorage(key: string, data: any): void {
-  try {
-    const offlineData = JSON.parse(localStorage.getItem('pwa_offline_data') || '{}');
-    offlineData[key] = {
-      data,
-      timestamp: Date.now()
-    };
-    localStorage.setItem('pwa_offline_data', JSON.stringify(offlineData));
-  } catch (error) {
-    console.warn('Failed to save to offline storage:', error);
-  }
-}
-
-/**
- * 从本地存储获取离线数据
- */
-function getFromOfflineStorage(key: string): any {
-  try {
-    const offlineData = JSON.parse(localStorage.getItem('pwa_offline_data') || '{}');
-    return offlineData[key]?.data || null;
-  } catch (error) {
-    console.warn('Failed to get from offline storage:', error);
-    return null;
-  }
 }
 
 // ==================== Hook主函数 ====================
@@ -167,49 +143,7 @@ export function usePWA(): UsePWAReturn {
   
   // ==================== Service Worker 注册 ====================
   
-  useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      registerServiceWorker();
-    }
-  }, []);
-  
-  const registerServiceWorker = async () => {
-    try {
-      const registration = await navigator.serviceWorker.register('/sw.js', {
-        scope: '/'
-      });
-      
-      setServiceWorker(prev => ({
-        ...prev,
-        isRegistered: true,
-        registration,
-        state: registration.active?.state || 'installing'
-      }));
-      
-      // 监听SW状态变化
-      if (registration.installing) {
-        trackServiceWorkerState(registration.installing);
-      } else if (registration.waiting) {
-        setUpdate(prev => ({ ...prev, hasUpdate: true }));
-      }
-      
-      // 监听SW更新
-      registration.addEventListener('updatefound', () => {
-        const newWorker = registration.installing;
-        if (newWorker) {
-          trackServiceWorkerState(newWorker);
-        }
-      });
-      
-      // 监听SW消息
-      navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage);
-      
-    } catch (error) {
-      console.error('Service Worker registration failed:', error);
-    }
-  };
-  
-  const trackServiceWorkerState = (worker: ServiceWorker) => {
+  const trackServiceWorkerState = useCallback((worker: ServiceWorker) => {
     worker.addEventListener('statechange', () => {
       setServiceWorker(prev => ({ ...prev, state: worker.state }));
       
@@ -220,9 +154,12 @@ export function usePWA(): UsePWAReturn {
         }
       }
     });
-  };
+  }, []);
   
-  const handleServiceWorkerMessage = (event: MessageEvent) => {
+  const handleServiceWorkerMessage = useCallback((event: MessageEvent<{
+    type: string;
+    data: { failed: number; successful: number };
+  }>) => {
     const { type, data } = event.data;
     
     switch (type) {
@@ -240,19 +177,61 @@ export function usePWA(): UsePWAReturn {
         // 处理缓存信息响应
         break;
     }
-  };
+  }, []);
+
+  const registerServiceWorker = useCallback(async () => {
+    try {
+      const registration = await navigator.serviceWorker.register('/sw.js', {
+        scope: '/'
+      });
+
+      setServiceWorker(prev => ({
+        ...prev,
+        isRegistered: true,
+        registration,
+        state: registration.active?.state || 'installing'
+      }));
+
+      if (registration.installing) {
+        trackServiceWorkerState(registration.installing);
+      } else if (registration.waiting) {
+        setUpdate(prev => ({ ...prev, hasUpdate: true }));
+      }
+
+      registration.addEventListener('updatefound', () => {
+        const newWorker = registration.installing;
+        if (newWorker) {
+          trackServiceWorkerState(newWorker);
+        }
+      });
+
+      navigator.serviceWorker.addEventListener(
+        'message',
+        handleServiceWorkerMessage
+      );
+    } catch (error) {
+      console.error('Service Worker registration failed:', error);
+    }
+  }, [handleServiceWorkerMessage, trackServiceWorkerState]);
+
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      void registerServiceWorker();
+    }
+  }, [registerServiceWorker]);
   
   // ==================== 安装提示处理 ====================
   
   useEffect(() => {
     // 监听beforeinstallprompt事件
-    const handleBeforeInstallPrompt = (e: Event) => {
-      e.preventDefault();
+    const handleBeforeInstallPrompt = (event: Event) => {
+      const promptEvent = event as BeforeInstallPromptEvent;
+      promptEvent.preventDefault();
       setInstall(prev => ({
         ...prev,
         showInstallPrompt: !isStandalone(),
         canInstall: true,
-        deferredPrompt: e
+        deferredPrompt: promptEvent
       }));
     };
     
@@ -272,37 +251,6 @@ export function usePWA(): UsePWAReturn {
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleAppInstalled);
-    };
-  }, []);
-  
-  // ==================== 网络状态监听 ====================
-  
-  useEffect(() => {
-    const handleOnline = () => {
-      setOffline(prev => ({
-        ...prev,
-        isOffline: false,
-        offlineTimestamp: null
-      }));
-      
-      // 网络恢复时自动同步数据
-      syncData();
-    };
-    
-    const handleOffline = () => {
-      setOffline(prev => ({
-        ...prev,
-        isOffline: true,
-        offlineTimestamp: Date.now()
-      }));
-    };
-    
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
     };
   }, []);
   
@@ -400,8 +348,11 @@ export function usePWA(): UsePWAReturn {
     
     try {
       // 触发后台同步（如果支持）
-      if (serviceWorker.registration && 'sync' in serviceWorker.registration) {
-        await (serviceWorker.registration as any).sync.register('game-data-sync');
+      const syncManager = (
+        serviceWorker.registration as ServiceWorkerRegistrationWithSync
+      ).sync;
+      if (syncManager) {
+        await syncManager.register('game-data-sync');
       }
       
       // 模拟同步完成（实际由SW处理）
@@ -418,6 +369,35 @@ export function usePWA(): UsePWAReturn {
       setOffline(prev => ({ ...prev, syncStatus: 'error' }));
     }
   }, [serviceWorker.registration, offline.isOffline]);
+
+  // ==================== 网络状态监听 ====================
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setOffline(prev => ({
+        ...prev,
+        isOffline: false,
+        offlineTimestamp: null
+      }));
+      void syncData();
+    };
+
+    const handleOffline = () => {
+      setOffline(prev => ({
+        ...prev,
+        isOffline: true,
+        offlineTimestamp: Date.now()
+      }));
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [syncData]);
   
   const clearCache = useCallback(async (): Promise<void> => {
     if (!serviceWorker.registration) {

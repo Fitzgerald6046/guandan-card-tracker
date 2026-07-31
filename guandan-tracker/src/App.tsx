@@ -445,7 +445,7 @@ const App: React.FC = () => {
       }
       
       return cards;
-    }, [gameState.currentRank]);
+    }, []);
     
     // 计算每种牌的剩余数量
     const getCardRemainingCount = (_cardRank: GameRank, index: number) => {
@@ -484,7 +484,7 @@ const App: React.FC = () => {
         
         return newSelected;
       });
-    }, [appState.handInput.isInputMode, appState.handInput.inputStep, toggleCardForPlayer]);
+    }, []);
     
     // 处理拖拽选择
     const handleMouseDown = useCallback((cardId: string) => {
@@ -808,8 +808,8 @@ const App: React.FC = () => {
                                   }
                                 >
                                   <CardImage
-                                    rank={card!.rank as any}
-                                    suit={card!.suit as any}
+                                    rank={card!.rank}
+                                    suit={card!.suit ?? undefined}
                                     displayName={card!.rank.toString()}
                                     isWildCard={card!.isWildCard}
                                     isRankCard={card!.isRankCard}
@@ -1044,8 +1044,8 @@ const App: React.FC = () => {
                                   title={isRevealed ? '点击取消明牌' : '点击设为明牌'}
                                 >
                                   <CardImage
-                                    rank={card.rank as any}
-                                    suit={card.suit as any}
+                                    rank={card.rank}
+                                    suit={card.suit ?? undefined}
                                     displayName={card.rank.toString()}
                                     isWildCard={card.isWildCard}
                                     isRankCard={card.isRankCard}

@@ -4,10 +4,17 @@
  */
 
 import React from 'react';
+import type { Rank, Suit } from '../types/game';
 import { CardImage } from './CardImage';
 
 export const CardDemo: React.FC = () => {
-  const demoCards = [
+  const demoCards: Array<{
+    rank: Rank;
+    suit: Suit | 'joker';
+    isWildCard?: boolean;
+    isRankCard?: boolean;
+    label: string;
+  }> = [
     { rank: 7, suit: 'hearts', isWildCard: true, label: '配牌(红心7)' },
     { rank: 7, suit: 'spades', isRankCard: true, label: '级牌(黑桃7)' },
     { rank: 11, suit: 'diamonds', label: '普通牌(方块J)' },
@@ -42,7 +49,7 @@ export const CardDemo: React.FC = () => {
             {sizes.map(size => (
               <div key={size} className="text-center">
                 <CardImage
-                  rank={7 as any}
+                  rank={7}
                   suit="hearts"
                   displayName="7"
                   isWildCard={true}
@@ -61,8 +68,8 @@ export const CardDemo: React.FC = () => {
             {demoCards.map((card, index) => (
               <div key={index} className="text-center">
                 <CardImage
-                  rank={card.rank as any}
-                  suit={card.suit as any}
+                  rank={card.rank}
+                  suit={card.suit}
                   displayName={card.rank === 15 ? '大王' : card.rank.toString()}
                   isWildCard={card.isWildCard}
                   isRankCard={card.isRankCard}
@@ -82,7 +89,7 @@ export const CardDemo: React.FC = () => {
           <div className="flex justify-center gap-8">
             <div className="text-center">
               <CardImage
-                rank={10 as any}
+                rank={10}
                 suit="spades"
                 displayName="10"
                 size="medium"
@@ -91,7 +98,7 @@ export const CardDemo: React.FC = () => {
             </div>
             <div className="text-center">
               <CardImage
-                rank={10 as any}
+                rank={10}
                 suit="spades"
                 displayName="10"
                 isSelected={true}
@@ -101,7 +108,7 @@ export const CardDemo: React.FC = () => {
             </div>
             <div className="text-center">
               <CardImage
-                rank={10 as any}
+                rank={10}
                 suit="spades"
                 displayName="10"
                 remainingCount={0}

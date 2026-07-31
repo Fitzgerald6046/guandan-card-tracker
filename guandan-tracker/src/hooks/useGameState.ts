@@ -5,13 +5,12 @@
 
 import { useReducer, useEffect, useCallback, useMemo } from 'react';
 import type { GameRank, Card, PlayerPosition, Team } from '../types/game';
-import { Suit, Rank, PlayerPosition as Pos } from '../types/game';
+import { PlayerPosition as Pos } from '../types/game';
 
 // 导入工具函数
-import { generateCards, updateCardRankStatus } from '../utils/cardData';
-import { isValidRank, getRankName, getNextRank, countRankCards } from '../utils/rankUtils';
+import { generateCards } from '../utils/cardData';
+import { isValidRank, getRankName, getNextRank } from '../utils/rankUtils';
 import { 
-  GAME_CONFIG, 
   DEFAULT_PLAYER_NAMES, 
   TEAM_CONFIG, 
   STORAGE_KEYS,
@@ -367,7 +366,7 @@ const loadFromLocalStorage = (): Partial<GameState> | null => {
 // ==================== 统计计算函数 ====================
 
 const calculateStats = (state: GameState): GameStats => {
-  const { cards, cardOwnership, currentRank } = state;
+  const { cards, cardOwnership } = state;
   const now = Date.now();
   
   // 初始化统计对象
@@ -473,7 +472,7 @@ export function useGameState(initialRank: GameRank = 2) {
     }, 500); // 防抖保存
 
     return () => clearTimeout(timeoutId);
-  }, [state.currentRank, state.selectedPlayer, state.cardOwnership, state.players]);
+  }, [state]);
 
   // ==================== Action创建器 ====================
 

@@ -10,9 +10,7 @@ import type {
   Player, 
   PlayerPosition, 
   Team,
-  PlayType,
-  TouchSelectState,
-  GameState
+  PlayType
 } from '../types/game';
 
 import { 
@@ -124,6 +122,7 @@ export function shuffleCards<T extends Card>(cards: T[]): T[] {
  * 排序优先级：配牌 > 级牌 > 王牌 > 普通牌（按花色和点数）
  */
 export function sortCardsByGuandanRule(cards: Card[], currentRank: GameRank): Card[] {
+  void currentRank;
   return [...cards].sort((a, b) => {
     // 1. 配牌最优先
     if (a.isWildCard && !b.isWildCard) return -1;

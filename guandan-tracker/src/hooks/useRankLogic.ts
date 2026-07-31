@@ -8,6 +8,7 @@ import type {
   Card, 
   GameRank, 
   PlayerPosition, 
+  Suit,
   Team 
 } from '../types/game';
 import { PlayerPosition as Pos } from '../types/game';
@@ -165,7 +166,10 @@ function analyzeRankControl(
   const totalWildCards = wildCards.length;
   const totalControl = totalRankCards + totalWildCards * 2; // 配牌权重为2
   
-  const teamControl: RankControlAnalysis['teamControl'] = {} as any;
+  const teamControl: RankControlAnalysis['teamControl'] = {
+    1: { rankCards: 0, wildCards: 0, controlRatio: 0, advantage: 0 },
+    2: { rankCards: 0, wildCards: 0, controlRatio: 0, advantage: 0 }
+  };
   let dominantTeam: Team | null = null;
   let maxAdvantage = 0;
   
@@ -188,7 +192,12 @@ function analyzeRankControl(
     }
   });
   
-  const playerControl: RankControlAnalysis['playerControl'] = {} as any;
+  const playerControl: RankControlAnalysis['playerControl'] = {
+    bottom: { rankCards: 0, wildCards: 0, controlPower: 0 },
+    left: { rankCards: 0, wildCards: 0, controlPower: 0 },
+    top: { rankCards: 0, wildCards: 0, controlPower: 0 },
+    right: { rankCards: 0, wildCards: 0, controlPower: 0 }
+  };
   Object.keys(playerStats).forEach(pos => {
     const position = pos as PlayerPosition;
     const stats = playerStats[position];
@@ -245,7 +254,10 @@ function analyzeWildCardDistribution(
   const unassigned = total - assigned;
   
   // 构建分布结果
-  const byTeam: WildCardDistribution['byTeam'] = {} as any;
+  const byTeam: WildCardDistribution['byTeam'] = {
+    1: { count: 0, ratio: 0, players: teamPlayers[1] },
+    2: { count: 0, ratio: 0, players: teamPlayers[2] }
+  };
   ([1, 2] as Team[]).forEach(team => {
     byTeam[team] = {
       count: teamCounts[team],
@@ -312,9 +324,13 @@ function analyzeKeyCards(
   
   // 级牌缺失分析
   const rankCards = cards.filter(card => isRankCard(card, currentRank));
-  const presentSuits = new Set(rankCards.map(card => card.suit).filter(Boolean));
-  const allSuits = ['spades', 'hearts', 'diamonds', 'clubs'] as const;
-  const missingSuits = allSuits.filter(suit => !presentSuits.has(suit as any));
+  const presentSuits = new Set<Suit>(
+    rankCards
+      .map(card => card.suit)
+      .filter((suit): suit is Suit => suit !== null)
+  );
+  const allSuits: Suit[] = ['spades', 'hearts', 'diamonds', 'clubs'];
+  const missingSuits = allSuits.filter(suit => !presentSuits.has(suit));
   
   const missingImpact = missingSuits.length === 0 ? 'low' :
                        missingSuits.length <= 1 ? 'medium' : 'high';
@@ -488,12 +504,11 @@ export function useRankLogic(gameState: UseGameStateReturn): UseRankLogicReturn 
   // 获取队伍优势评分
   const getTeamAdvantageScore = useCallback((team: Team): number => {
     const control = rankControl.teamControl[team];
-    const wildCards = wildCardDistribution.byTeam[team];
     const jokers = keyCards.jokers.byTeam[team];
     
     // 综合评分：配牌*3 + 级牌*2 + 王牌*1
     return control.wildCards * 3 + control.rankCards * 2 + jokers;
-  }, [rankControl, wildCardDistribution, keyCards]);
+  }, [rankControl, keyCards]);
   
   // 获取最佳出牌建议
   const getBestPlayAdvice = useCallback((playerPosition: PlayerPosition): string[] => {
@@ -532,7 +547,7 @@ export function useRankLogic(gameState: UseGameStateReturn): UseRankLogicReturn 
     }
     
     return advice.length > 0 ? advice : ['根据场上情况灵活出牌'];
-  }, [gameState, currentRank, rankControl, getTeamAdvantageScore]);
+  }, [gameState, currentRank, getTeamAdvantageScore]);
   
   return {
     rankControl,

@@ -7,7 +7,6 @@ import { useState, useCallback, useRef } from 'react';
 import type { 
   Card, 
   TouchSelectState, 
-  TouchEventData, 
   TouchEventType 
 } from '../types/game';
 
@@ -160,14 +159,12 @@ export function useTouchSelect() {
   const handleTouchEnd = useCallback((
     coordinates?: { x: number; y: number }
   ): Card[] => {
+    void coordinates;
     clearLongPressTimer();
 
     if (!touchState.isSelecting) return [];
 
     const selectedCards = [...touchState.selectedCards];
-    const wasLongPress = touchRef.current.isLongPress;
-    const hasMoved = touchRef.current.hasMoved;
-
     // 重置状态
     resetTouchState();
 

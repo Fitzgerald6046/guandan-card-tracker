@@ -106,6 +106,12 @@ export interface Card {
   
   /** 是否为红色牌（兼容性属性） */
   isRed?: boolean;
+
+  /** 是否为红心（兼容旧版判型逻辑） */
+  isHearts?: boolean;
+
+  /** 牌面显示名称（输入界面与历史记录使用） */
+  displayName?: string;
 }
 
 /** 卡牌创建参数 */
@@ -243,6 +249,7 @@ export const PlayType = {
   BOMB_SEVEN: 'bomb_seven',          // 七炸
   BOMB_EIGHT: 'bomb_eight',          // 八炸
   STRAIGHT_FLUSH: 'straight_flush',   // 同花顺
+  FOUR_KINGS: 'four_kings',           // 四王炸
   PASS: 'pass'                       // 过牌
 } as const;
 
@@ -407,14 +414,14 @@ export type GameAction =
   | { type: 'UPDATE_CARD'; payload: { cardId: string; updates: Partial<Card> } }
   | { type: 'SET_CURRENT_PLAYER'; payload: { position: PlayerPosition } }
   | { type: 'END_ROUND'; payload: { winnerPosition: PlayerPosition } }
-  | { type: 'RESET_GAME'; payload?: {} }
-  | { type: 'ENTER_HAND_INPUT'; payload?: {} }
-  | { type: 'EXIT_HAND_INPUT'; payload?: {} }
+  | { type: 'RESET_GAME'; payload?: never }
+  | { type: 'ENTER_HAND_INPUT'; payload?: never }
+  | { type: 'EXIT_HAND_INPUT'; payload?: never }
   | { type: 'SELECT_PLAYER_FOR_INPUT'; payload: { playerPosition: PlayerPosition } }
   | { type: 'ADD_CARD_TO_PLAYER'; payload: { playerPosition: PlayerPosition; cardId: string } }
   | { type: 'REMOVE_CARD_FROM_PLAYER'; payload: { playerPosition: PlayerPosition; cardId: string } }
   | { type: 'SET_REVEALED_CARD'; payload: { playerPosition: PlayerPosition; cardId: string; revealed: boolean } }
-  | { type: 'CONFIRM_HAND_INPUT'; payload?: {} };
+  | { type: 'CONFIRM_HAND_INPUT'; payload?: never };
 
 // ==================== 常量定义 ====================
 
@@ -534,33 +541,245 @@ export interface SuspectedCard {
   reasoning: string;
 }
 
+/** 根据过牌行为形成的软约束；后续出牌可将其标记为已反证。 */
+export interface PlayerPassInference {
+  id: string;
+  playerPosition: PlayerPosition;
+  leadPlayerPosition: PlayerPosition;
+  leadType: PlayType;
+  leadDisplay: string;
+  /** 可安全映射到单点数证据时的主点数。 */
+  leadMainRank?: GameRank;
+  /** 同牌型直接管牌所需的候选点数及最少张数。 */
+  candidateRankCounts: Array<{
+    rank: GameRank;
+    atLeastCount: 1 | 2 | 3;
+  }>;
+  evidenceCount: number;
+  confidence: number;
+  status: 'active' | 'contradicted' | 'cooperative';
+  summary: string;
+  lastTimestamp: number;
+}
+
+/** 某一玩家对某点数的后验持牌估计。 */
+export interface PlayerRankProbability {
+  knownCount: number;
+  expectedCount: number;
+  probabilityAtLeastOne: number;
+  pairProbability: number;
+  tripleProbability: number;
+  bombProbability: number;
+  countCertainty: number;
+  minCount: number;
+  maxCount: number;
+}
+
+/** 单点数或连续点数组合的后验概率。 */
+export interface RankPatternProbability {
+  ranks: GameRank[];
+  probability: number;
+  approximate: boolean;
+}
+
+/** 某名玩家当前可能保留的主要牌形。 */
+export interface PlayerHandShapeInference {
+  playerPosition: PlayerPosition;
+  pairCandidates: RankPatternProbability[];
+  tripleCandidates: RankPatternProbability[];
+  bombCandidates: RankPatternProbability[];
+  straightCandidates: RankPatternProbability[];
+  pairStraightCandidates: RankPatternProbability[];
+  tripleStraightCandidates: RankPatternProbability[];
+  certainty: number;
+}
+
+/** 某点数在对手中形成炸弹的概率。 */
+export interface RankBombInference {
+  rank: GameRank;
+  remainingCopies: number;
+  outsideMyHandCopies: number;
+  anyOpponentBombProbability: number;
+  mostLikelyPlayers: PlayerPosition[];
+  playerEstimates: Record<PlayerPosition, PlayerRankProbability>;
+  rankInformationCoverage: number;
+  exactJointProbability: boolean;
+}
+
+export interface CardDistributionInference {
+  informationCoverage: number;
+  certainty: number;
+  bombCandidates: RankBombInference[];
+  playerShapes: PlayerHandShapeInference[];
+  /** 真正进入后验分布的软证据数量。 */
+  appliedEvidenceCount: number;
+}
+
+/** 一次可解释的限制选择观察。 */
+export interface ChoiceEvidence {
+  id: string;
+  actionId: string;
+  playerPosition: PlayerPosition;
+  scenario: 'pair_response' | 'triple_pair_kicker';
+  chosenRank: GameRank;
+  alternativeRanks: GameRank[];
+  equivalentChoiceCount: number;
+  remainingBeforePlay: number;
+  informationWeight: number;
+  likelihoodRatio: number;
+  alternativeLikelihoodRatios: Partial<Record<GameRank, number>>;
+  summary: string;
+}
+
+/** 对“某家某点数至少有几张”的似然证据。 */
+export interface RankCountLikelihoodEvidence {
+  id: string;
+  playerPosition: PlayerPosition;
+  rank: GameRank;
+  atLeastCount: 1 | 2 | 3 | 4;
+  likelihoodIfPresent: number;
+  likelihoodIfAbsent: number;
+  source: 'restricted_choice' | 'pass' | 'ownership';
+  /** 同一次行为产生的多条相关证据共用该ID，用于限权和审计。 */
+  groupId?: string;
+  summary: string;
+}
+
+/** 硬事实与软似然统一登记，但只有软似然需要再次进入概率计算。 */
+export interface InferenceEvidenceLedger {
+  knownCardFactCount: number;
+  rankCountEvidence: RankCountLikelihoodEvidence[];
+  choiceEvidence: ChoiceEvidence[];
+  summary: string;
+}
+
+/** 某名玩家由实际出牌行为形成的后验牌路倾向。 */
+export interface PlayerStructureInference {
+  playerPosition: PlayerPosition;
+  pairTendency: number;
+  pairFlexibility: number;
+  tripleTendency: number;
+  straightTendency: number;
+  confidence: number;
+  evidenceCount: number;
+  effectiveEvidenceWeight: number;
+  evidence: string[];
+}
+
+/** “三家已展示、仅一家未展示”等行为证据形成的点数归属线索。 */
+export interface RankOwnershipClue {
+  rank: GameRank;
+  suspectedOwner: PlayerPosition;
+  probability: number;
+  confidence: 'clue' | 'likely' | 'strong' | 'known';
+  evidenceCount: number;
+  summary: string;
+}
+
+/** 5、10耗尽后，自然顺子路线的精确剩余情况。 */
+export interface StraightRouteInference {
+  fivesRemaining: number;
+  tensRemaining: number;
+  naturalRoutesRemaining: number;
+  totalNaturalRoutes: number;
+  status: 'open' | 'half_blocked' | 'blocked';
+  summary: string;
+}
+
+/** 每一次录入后给使用者展示的一步推理。 */
+export interface ReasoningStepReminder {
+  id: string;
+  kind: 'fact' | 'probability' | 'pattern' | 'correction';
+  confidence: number;
+  summary: string;
+}
+
+/** 模拟人工记牌的行为推理层。 */
+export interface HumanReasoningInference {
+  openingInsights: string[];
+  ownershipClues: RankOwnershipClue[];
+  playerStructures: PlayerStructureInference[];
+  choiceEvidence: ChoiceEvidence[];
+  straightRoutes: StraightRouteInference;
+  latestStepReminders: ReasoningStepReminder[];
+}
+
+/** 残局枚举得到的一种具体点数组合。 */
+export interface EndgameHandCandidate {
+  ranks: Rank[];
+  probability: number;
+}
+
+/** 单个玩家在≤5张时的精确点数组合枚举。 */
+export interface EndgamePlayerInference {
+  playerPosition: PlayerPosition;
+  remainingCount: number;
+  unknownSlotCount: number;
+  rankCompositionCount: number;
+  physicalCombinationCount: number;
+  certainty: number;
+  usesSoftEvidence: boolean;
+  lockedCards: Array<{
+    rank: Rank;
+    count: number;
+  }>;
+  rankProbabilities: Partial<Record<Rank, {
+    probabilityAtLeastOne: number;
+    expectedCount: number;
+    minCount: number;
+    maxCount: number;
+  }>>;
+  topCandidates: EndgameHandCandidate[];
+  summary: string;
+}
+
+export interface EndgameInference {
+  threshold: number;
+  players: EndgamePlayerInference[];
+}
+
+export interface InferenceChange {
+  id: string;
+  category: 'pair' | 'triple' | 'bomb' | 'pass_constraint' | 'ownership' | 'behavior';
+  playerPosition: PlayerPosition;
+  rank?: GameRank;
+  direction: 'increased' | 'decreased' | 'confirmed' | 'eliminated' | 'added' | 'revised';
+  previousProbability?: number;
+  currentProbability: number;
+  delta: number;
+  summary: string;
+}
+
+/** 最近一次动作带来的推理变化。 */
+export interface InferenceEvolution {
+  actionId: string;
+  actionSummary: string;
+  informationCoverageDelta: number;
+  certaintyDelta: number;
+  changes: InferenceChange[];
+  reasoningSteps: ReasoningStepReminder[];
+}
+
 /** AI分析结果 */
 export interface AIAnalysisResult {
   /** 分析时间戳 */
   timestamp: number;
-  /** 游戏阶段 */
-  gamePhase: 'early' | 'middle' | 'late' | 'endgame';
-  /** 各玩家剩余牌数推测 */
-  estimatedCardCounts: Record<PlayerPosition, {
-    count: number;
-    confidence: number;
-  }>;
-  /** 关键牌分布推测 */
-  keyCardDistribution: {
-    wildCards: Record<PlayerPosition, number>;
-    rankCards: Record<PlayerPosition, number>;
-    jokers: Record<PlayerPosition, number>;
-  };
   /** 威胁等级评估 */
   threatLevels: Record<PlayerPosition, {
     level: 'low' | 'medium' | 'high' | 'critical';
+    score: number;
+    role: 'self' | 'teammate' | 'opponent';
     reasoning: string[];
   }>;
   /** 推荐策略 */
   suggestions: {
     action: 'play' | 'pass' | 'wait';
+    /** 供手机牌面单行横幅直接显示的结构化结论。 */
+    summary: string;
     reasoning: string;
     confidence: number;
+    resourceWarning?: string;
+    reasonCodes?: string[];
     alternativeOptions?: string[];
   };
   /** 结构分析 */
@@ -586,6 +805,16 @@ export interface AIAnalysisResult {
   recommendations: {
     immediate: string[];
   };
+  /** 由过牌序列推导出的玩家牌型约束 */
+  passInferences: PlayerPassInference[];
+  /** 基于已知牌和已出牌动态更新的持牌概率 */
+  cardDistribution: CardDistributionInference;
+  /** 进入后验计算的统一证据账本 */
+  evidenceLedger: InferenceEvidenceLedger;
+  /** 逐玩家、逐动作累积的人工牌路推理 */
+  humanReasoning: HumanReasoningInference;
+  /** ≤5张时触发的具体点数组合枚举 */
+  endgameInference: EndgameInference;
   /** 置信度 */
   confidence: number;
 }

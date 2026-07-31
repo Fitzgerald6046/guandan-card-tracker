@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import type { PlayRecord, PlayerPosition, Card } from '../types/game';
-import type { PlayAction, RoundState } from '../hooks/usePlayHistory';
+import type { PlayAction } from '../hooks/usePlayHistory';
 import { usePlayHistory } from '../hooks/usePlayHistory';
 import { CardImage } from './CardImage';
 
@@ -63,7 +63,8 @@ const PlayRecordItem: React.FC<PlayRecordItemProps> = ({
       'bomb_five': 'red',
       'bomb_six': 'red',
       'straight': 'yellow',
-      'straight_flush': 'pink'
+      'straight_flush': 'pink',
+      'four_kings': 'red'
     };
     return colors[type] || 'gray';
   };
@@ -120,8 +121,8 @@ const PlayRecordItem: React.FC<PlayRecordItemProps> = ({
             {playRecord.cards.slice(0, 6).map((card, index) => (
               <div key={`${card.id}-${index}`} className="transform scale-75">
                 <CardImage 
-                  rank={card.rank as any}
-                  suit={card.suit as any}
+                  rank={card.rank}
+                  suit={card.suit ?? undefined}
                   displayName={card.rank.toString()}
                   isWildCard={card.isWildCard}
                   isRankCard={card.isRankCard}
@@ -194,15 +195,12 @@ export const PlayHistoryPanel: React.FC<PlayHistoryPanelProps> = ({
     startRecording,
     stopRecording,
     pauseRecording,
-    resumeRecording,
     recordPlay,
-    recordPass,
     undoLastPlay,
     startNewRound,
     clearHistory,
     exportPlayHistory,
     importPlayHistory,
-    getPlayerStats,
     getRoundStats
   } = usePlayHistory();
 

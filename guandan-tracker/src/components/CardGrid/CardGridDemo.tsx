@@ -123,8 +123,8 @@ const CardGridDemo: React.FC = () => {
 
   // 监听分组变更事件
   React.useEffect(() => {
-    const handleGroupChange = (event: any) => {
-      setGroupBy(event.detail);
+    const handleGroupChange = (event: Event) => {
+      setGroupBy((event as CustomEvent<GroupByOption>).detail);
     };
 
     window.addEventListener('groupByChange', handleGroupChange);
@@ -317,4 +317,4 @@ const CardGridDemo: React.FC = () => {
   );
 };
 
-export default CardGridDemo; 
+export default CardGridDemo;

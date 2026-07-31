@@ -54,6 +54,15 @@ const RankSelector: React.FC<RankSelectorProps> = ({
     };
   }, []);
 
+  // 处理级数选择
+  const handleRankSelection = useCallback((rank: GameRank) => {
+    if (rank === currentRank) return;
+
+    setPendingRank(rank);
+    setShowConfirmDialog(true);
+    setIsOpen(false);
+  }, [currentRank]);
+
   // 更新统计信息
   useEffect(() => {
     setStats(calculateStats(currentRank, allCards));
@@ -91,7 +100,7 @@ const RankSelector: React.FC<RankSelectorProps> = ({
       document.addEventListener('keydown', handleKeyDown);
       return () => document.removeEventListener('keydown', handleKeyDown);
     }
-  }, [currentRank, disabled, isOpen]);
+  }, [currentRank, disabled, isOpen, handleRankSelection]);
 
   // 点击外部关闭下拉菜单
   useEffect(() => {
@@ -111,15 +120,6 @@ const RankSelector: React.FC<RankSelectorProps> = ({
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
   }, [isOpen]);
-
-  // 处理级数选择
-  const handleRankSelection = (rank: GameRank) => {
-    if (rank === currentRank) return;
-    
-    setPendingRank(rank);
-    setShowConfirmDialog(true);
-    setIsOpen(false);
-  };
 
   // 确认级数变更
   const confirmRankChange = () => {
@@ -340,4 +340,4 @@ const RankSelector: React.FC<RankSelectorProps> = ({
   );
 };
 
-export default RankSelector; 
+export default RankSelector;

@@ -241,7 +241,8 @@ export const PLAY_TYPE_WEIGHTS = {
   'bomb_six': 102,
   'bomb_seven': 103,
   'bomb_eight': 104,
-  'straight_flush': 200
+  'straight_flush': 200,
+  'four_kings': 1000
 } as const;
 
 // ==================== UI 相关常量 ====================

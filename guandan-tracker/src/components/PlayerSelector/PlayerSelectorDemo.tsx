@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import PlayerSelector from './PlayerSelector';
-import type { Player, GameRank, PlayerPosition, Team } from '../../types';
+import type { Card, Player, GameRank, PlayerPosition, Suit, Team } from '../../types';
 import { PlayerPosition as PlayerPositionEnum, Rank } from '../../types/game';
 
 // 生成唯一ID
@@ -9,11 +9,11 @@ const generateId = (): string => {
 };
 
 // 生成随机卡牌数据（模拟）
-const generateMockCards = (count: number, currentRank: GameRank) => {
-  const cards = [];
+const generateMockCards = (count: number, currentRank: GameRank): Card[] => {
+  const cards: Card[] = [];
   for (let i = 0; i < count; i++) {
-    const suits = ['hearts', 'diamonds', 'clubs', 'spades'];
-    const ranks = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+    const suits: Suit[] = ['hearts', 'diamonds', 'clubs', 'spades'];
+    const ranks: GameRank[] = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
     
     const suit = suits[Math.floor(Math.random() * suits.length)];
     const rank = ranks[Math.floor(Math.random() * ranks.length)];
@@ -23,8 +23,8 @@ const generateMockCards = (count: number, currentRank: GameRank) => {
     
     cards.push({
       id: generateId(),
-      suit: suit as any,
-      rank: rank as any,
+      suit,
+      rank,
       isRankCard: isCurrentRankCard,
       isWildCard: isWild,
       isPlayed: false,

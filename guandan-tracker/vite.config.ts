@@ -15,22 +15,19 @@ export default defineConfig({
         name: '掼蛋记牌器',
         short_name: '掼蛋记牌',
         description: '专业的掼蛋记牌工具，支持多种级数和特殊牌标识',
-        theme_color: '#1f2937',
-        background_color: '#ffffff',
+        theme_color: '#1d4ed8',
+        background_color: '#f8fafc',
         display: 'standalone',
-        orientation: 'portrait',
+        orientation: 'portrait-primary',
+        lang: 'zh-CN',
         scope: '/',
         start_url: '/',
         icons: [
           {
-            src: '/icon-192.png',
-            sizes: '192x192',
-            type: 'image/png'
-          },
-          {
-            src: '/icon-512.png',
-            sizes: '512x512',
-            type: 'image/png'
+            src: '/guandan-icon.svg',
+            sizes: 'any',
+            type: 'image/svg+xml',
+            purpose: 'any maskable'
           }
         ]
       }

@@ -191,7 +191,7 @@ export const LazyImage: React.FC<LazyImageProps> = ({
           }));
           onLoad?.();
           return;
-        } catch (fallbackError) {
+        } catch {
           // 备用图片也失败了
         }
       }

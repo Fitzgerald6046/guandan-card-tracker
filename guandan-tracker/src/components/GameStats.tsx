@@ -185,7 +185,7 @@ const GameStats: React.FC<GameStatsProps> = ({
   };
 
   return (
-    <div className={`card-enhanced glassmorphism ${className} fade-in`}>
+    <div className={`card-enhanced glassmorphism ${detailed ? 'game-stats-detailed' : ''} ${className} fade-in`}>
       {/* 头部控制 */}
       <div className="p-4 border-b border-gray-200">
         <div className="flex items-center justify-between mb-4">
@@ -193,14 +193,14 @@ const GameStats: React.FC<GameStatsProps> = ({
           
           {/* 视图模式切换 */}
           <div className="flex space-x-1 bg-gray-100 p-1 rounded-xl">
-            {[
+            {([
               { id: 'overview', label: '总览', icon: '📈' },
               { id: 'teams', label: '队伍', icon: '👥' },
               { id: 'analysis', label: '分析', icon: '🔍' }
-            ].map((mode) => (
+            ] as const).map((mode) => (
               <button
                 key={mode.id}
-                onClick={() => setViewMode(mode.id as any)}
+                onClick={() => setViewMode(mode.id)}
                 className={`
                   px-3 py-1 text-xs font-medium rounded-lg transition-all duration-200
                   ${viewMode === mode.id
@@ -360,7 +360,7 @@ const GameStats: React.FC<GameStatsProps> = ({
 
                 {/* 队伍成员 */}
                 <div className="space-y-2">
-                  {team.players.map((player, playerIndex) => {
+                  {team.players.map((player) => {
                     const powerDisplay = getPowerLevelDisplay(player.powerLevel);
                     return (
                       <div 
@@ -457,4 +457,4 @@ const GameStats: React.FC<GameStatsProps> = ({
   );
 };
 
-export default GameStats; 
+export default GameStats;

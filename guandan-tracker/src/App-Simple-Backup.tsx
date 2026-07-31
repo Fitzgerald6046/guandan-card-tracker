@@ -113,7 +113,7 @@ const App: React.FC = () => {
   // 计算玩家牌数统计
   const getPlayerCardStats = (player: PlayerPosition) => {
     const playerPlayedCards = Object.entries(playedCards)
-      .filter(([_, cardPlayer]) => cardPlayer === player)
+      .filter(([, cardPlayer]) => cardPlayer === player)
       .map(([cardId]) => cardId);
     
     const playedCount = playerPlayedCards.length;
