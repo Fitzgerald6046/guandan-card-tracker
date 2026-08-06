@@ -142,10 +142,24 @@ const getPlayerRankEstimate = (
   const possibleCounts = distribution
     .filter(item => item.probability > 1e-12)
     .map(item => item.count + knownCount);
+  const probabilityByCount = Array.from(
+    { length: Math.max(knownCount, ...possibleCounts) + 1 },
+    () => 0
+  );
+  distribution.forEach(item => {
+    probabilityByCount[knownCount + item.count] = item.probability;
+  });
+  const mostLikelyCount = probabilityByCount.reduce(
+    (bestCount, probability, count) =>
+      probability > probabilityByCount[bestCount] ? count : bestCount,
+    0
+  );
 
   return {
     knownCount,
+    probabilityByCount,
     expectedCount: knownCount + expectedUnknownCount,
+    mostLikelyCount,
     probabilityAtLeastOne: clampProbability(probabilityAtLeast(1)),
     pairProbability: clampProbability(probabilityAtLeast(2)),
     tripleProbability: clampProbability(probabilityAtLeast(3)),
@@ -229,13 +243,22 @@ const buildPlayerShapeInference = (
  * 多元超几何分布：计算至少一名对手拥有4张同点数牌的联合概率。
  * 当未知槽位和未知牌池不一致时，调用方会退回边际概率近似。
  */
-const getAnyOpponentBombProbability = (
+interface JointRankPosterior {
+  anyOpponentBombProbability: number;
+  probabilityByPlayer: Record<PlayerPosition, number[]>;
+}
+
+/**
+ * 枚举单点数在所有玩家槽位间的联合分配，同时输出炸弹概率和各家完整
+ * 张数边际。两类结果共享同一归一化后验，避免独立估算互相冲突。
+ */
+const getJointRankPosterior = (
   populationSize: number,
   rankCopies: number,
   playerSlots: Record<PlayerPosition, number>,
   knownCounts: Record<PlayerPosition, number>,
   evidence: RankCountLikelihoodEvidence[] = []
-): number | null => {
+): JointRankPosterior | null => {
   const assignedSlots = PLAYER_POSITIONS.reduce(
     (total, position) => total + playerSlots[position],
     0
@@ -251,10 +274,14 @@ const getAnyOpponentBombProbability = (
   }
 
   const denominator = choose(populationSize, rankCopies);
-  if (denominator === 0) return rankCopies === 0 ? 0 : null;
+  if (denominator === 0 && rankCopies > 0) return null;
 
   let bombWeight = 0;
   let totalWeight = 0;
+  const countWeights = PLAYER_POSITIONS.reduce((byPlayer, position) => {
+    byPlayer[position] = [];
+    return byPlayer;
+  }, {} as Record<PlayerPosition, number[]>);
   const allocations = new Map<PlayerPosition, number>();
   const visitGroup = (
     groupIndex: number,
@@ -274,6 +301,12 @@ const getAnyOpponentBombProbability = (
       }, 1);
       const posteriorWeight = weight * evidenceLikelihood;
       totalWeight += posteriorWeight;
+      PLAYER_POSITIONS.forEach(position => {
+        const totalCount = knownCounts[position] +
+          (allocations.get(position) ?? 0);
+        countWeights[position][totalCount] =
+          (countWeights[position][totalCount] ?? 0) + posteriorWeight;
+      });
       const opponentHasBomb = OPPONENT_POSITIONS.some(position =>
         knownCounts[position] + (allocations.get(position) ?? 0) >= 4
       );
@@ -298,9 +331,64 @@ const getAnyOpponentBombProbability = (
   };
 
   visitGroup(0, rankCopies, 1);
-  return totalWeight > 0
-    ? clampProbability(bombWeight / totalWeight)
-    : null;
+  if (totalWeight <= 0) return null;
+
+  return {
+    anyOpponentBombProbability: clampProbability(bombWeight / totalWeight),
+    probabilityByPlayer: PLAYER_POSITIONS.reduce((byPlayer, position) => {
+      byPlayer[position] = Array.from(
+        { length: countWeights[position].length },
+        (_, count) => (countWeights[position][count] ?? 0) / totalWeight
+      );
+      return byPlayer;
+    }, {} as Record<PlayerPosition, number[]>)
+  };
+};
+
+const getEstimateFromCountDistribution = (
+  knownCount: number,
+  probabilityByCount: number[]
+): PlayerRankProbability => {
+  const probabilityAtLeast = (count: number) => probabilityByCount
+    .slice(count)
+    .reduce((total, probability) => total + probability, 0);
+  const expectedCount = probabilityByCount.reduce(
+    (total, probability, count) => total + probability * count,
+    0
+  );
+  const supportedCounts = probabilityByCount.flatMap(
+    (probability, count) => probability > 1e-12 ? [count] : []
+  );
+  const entropy = probabilityByCount.reduce(
+    (total, probability) => probability > 0
+      ? total - probability * Math.log(probability)
+      : total,
+    0
+  );
+  const maximumEntropy = supportedCounts.length > 1
+    ? Math.log(supportedCounts.length)
+    : 0;
+  const mostLikelyCount = probabilityByCount.reduce(
+    (bestCount, probability, count) =>
+      probability > (probabilityByCount[bestCount] ?? 0) ? count : bestCount,
+    0
+  );
+
+  return {
+    knownCount,
+    probabilityByCount,
+    expectedCount,
+    mostLikelyCount,
+    probabilityAtLeastOne: clampProbability(probabilityAtLeast(1)),
+    pairProbability: clampProbability(probabilityAtLeast(2)),
+    tripleProbability: clampProbability(probabilityAtLeast(3)),
+    bombProbability: clampProbability(probabilityAtLeast(4)),
+    countCertainty: maximumEntropy > 0
+      ? clampProbability(1 - entropy / maximumEntropy)
+      : 1,
+    minCount: supportedCounts.length > 0 ? Math.min(...supportedCounts) : knownCount,
+    maxCount: supportedCounts.length > 0 ? Math.max(...supportedCounts) : knownCount
+  };
 };
 
 /**
@@ -394,7 +482,7 @@ export function inferCardDistribution(
       0,
       gameState.allCards.length - playedCardIds.size - knownUnplayedTotal
     );
-    const playerEstimates = PLAYER_POSITIONS.reduce((estimates, position) => {
+    let playerEstimates = PLAYER_POSITIONS.reduce((estimates, position) => {
       estimates[position] = getPlayerRankEstimate(
         populationSize,
         unknownCopies,
@@ -406,13 +494,22 @@ export function inferCardDistribution(
       );
       return estimates;
     }, {} as Record<PlayerPosition, PlayerRankProbability>);
-    const exactJointProbability = getAnyOpponentBombProbability(
+    const jointPosterior = getJointRankPosterior(
       populationSize,
       unknownCopies,
       playerSlots,
       knownCounts,
       rankEvidence
     );
+    if (jointPosterior) {
+      playerEstimates = PLAYER_POSITIONS.reduce((estimates, position) => {
+        estimates[position] = getEstimateFromCountDistribution(
+          knownCounts[position],
+          jointPosterior.probabilityByPlayer[position]
+        );
+        return estimates;
+      }, {} as Record<PlayerPosition, PlayerRankProbability>);
+    }
     const approximateJointProbability = 1 - OPPONENT_POSITIONS.reduce(
       (noneProbability, position) =>
         noneProbability * (1 - playerEstimates[position].bombProbability),
@@ -440,13 +537,14 @@ export function inferCardDistribution(
         remainingCopies - knownCounts.bottom
       ),
       anyOpponentBombProbability:
-        exactJointProbability ?? clampProbability(approximateJointProbability),
+        jointPosterior?.anyOpponentBombProbability ??
+          clampProbability(approximateJointProbability),
       mostLikelyPlayers,
       playerEstimates,
       rankInformationCoverage: totalCountByRank[rank] > 0
         ? clampProbability(knownRankEvidence / totalCountByRank[rank])
         : 0,
-      exactJointProbability: exactJointProbability !== null
+      exactJointProbability: jointPosterior !== null
     };
   }).sort((left, right) =>
     right.anyOpponentBombProbability - left.anyOpponentBombProbability ||

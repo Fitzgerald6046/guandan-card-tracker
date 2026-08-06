@@ -172,7 +172,7 @@ export function analyzeChoiceEvidence(
                 alternatives,
                 informationWeight
               ),
-            summary: `${PLAYER_DISPLAY_NAMES[record.playerPosition]}用${RANK_DISPLAY_NAMES[chosenRank]}对子应对时，另有${alternatives.map(rank => RANK_DISPLAY_NAMES[rank]).join('/')}等相邻强度选择；按限制选择，未选对子存在性的赔率下调×${likelihoodRatio.toFixed(2)}（当时剩${remainingBeforePlay}张）。`
+            summary: `${PLAYER_DISPLAY_NAMES[record.playerPosition]}用${RANK_DISPLAY_NAMES[chosenRank]}对子应对时，牌池中仍有${alternatives.map(rank => RANK_DISPLAY_NAMES[rank]).join('/')}等相邻强度候选；在尚未计算拆牌成本前，只视为对子选择空间变窄的软证据（当时剩${remainingBeforePlay}张）。`
           });
         }
       }

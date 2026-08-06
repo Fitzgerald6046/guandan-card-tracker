@@ -11,19 +11,16 @@ import React, {
   useCallback
 } from 'react';
 import { validateCardType } from './utils/guandanRules';
+import { validateDoudizhuCardType } from './utils/doudizhuRules';
+import { pickCardsByVoiceRanks } from './utils/quickCardInput';
 import {
-  parseQuickPlayCommand,
-  pickCardsByRanks,
-  shouldCommitQuickPlay
-} from './utils/quickCardInput';
-import {
-  CARDS_PER_PLAYER,
   FINISH_LABELS,
-  PLAYER_DISPLAY_NAMES,
   getGameProgress,
   getNextEligiblePlayer,
+  getSkippedPlayersBeforeTarget,
   getPlayedCardCount,
-  getPlayerDisplayName
+  getPlayerDisplayName,
+  undoLastGameOperation
 } from './utils/gameProgress';
 import { normalizePlayType } from './utils/playTypeMapping';
 import { GameReplay } from './components/GameReplay';
@@ -31,10 +28,10 @@ import {
   useGameHistory,
   type GameRecord
 } from './hooks/useGameHistory';
+import { useInferenceViewModel } from './hooks/useInferenceViewModel';
 import { AIAssistant } from './components/AIAssistant';
-import { RankInferenceBadge } from './components/RankInferenceBadge';
-import { DecisionBanner } from './components/DecisionBanner';
-import { PlayerThreatDot } from './components/PlayerThreatDot';
+import { PlayerInferenceStrip } from './components/PlayerInferenceStrip';
+import { KnownOwnerOverlay } from './components/KnownOwnerOverlay';
 import { VoiceControl } from './components/VoiceControl';
 import CardImage from './components/CardImage';
 import { GuandanAIReasoningEngine } from './utils/aiReasoningEngine';
@@ -57,6 +54,13 @@ import {
   GameStatus,
   RANK_DISPLAY_NAMES
 } from './types/game';
+import type { GameMode } from './types/game';
+import {
+  getActivePlayerPositions,
+  getGameMode,
+  getModePlayerTeam,
+  getPlayerInitialCardCount
+} from './utils/gameMode';
 
 type InputPurpose = 'hand' | 'revealed';
 
@@ -136,6 +140,166 @@ const updateCardsForCurrentRank = (
     };
   });
 
+/** 生成当前模式的完整实体牌面。 */
+function generateSortedCards(
+  currentRank: GameRank,
+  gameMode: GameMode = 'guandan'
+): Card[] {
+  const cards: Card[] = [];
+  const copiesPerRank = gameMode === 'doudizhu' ? 4 : 8;
+  const copiesPerSuit = gameMode === 'doudizhu' ? 1 : 2;
+  const suits = [Suit.SPADES, Suit.HEARTS, Suit.CLUBS, Suit.DIAMONDS];
+  const baseRanks = [];
+
+  for (let rank = 2; rank <= 14; rank++) {
+    if (rank !== currentRank) baseRanks.push(rank);
+  }
+
+  baseRanks.forEach(rank => {
+    for (let index = 0; index < copiesPerRank; index += 1) {
+      const suit = suits[Math.floor(index / copiesPerSuit)];
+      cards.push({
+        id: `${rank}-${index}`,
+        rank: rank as Rank,
+        isRankCard: false,
+        isWildCard: false,
+        isHearts: suit === Suit.HEARTS,
+        suit,
+        displayName: RANK_DISPLAY_NAMES[rank as Rank],
+        isPlayed: false,
+        isSelected: false,
+        timestamp: Date.now()
+      });
+    }
+  });
+
+  for (let index = 0; index < copiesPerRank; index += 1) {
+    const suit = suits[Math.floor(index / copiesPerSuit)];
+    const isHearts = suit === Suit.HEARTS;
+    cards.push({
+      id: `${currentRank}-${index}`,
+      rank: currentRank,
+      isRankCard: gameMode === 'guandan',
+      isWildCard: gameMode === 'guandan' && isHearts,
+      isHearts,
+      suit,
+      displayName: RANK_DISPLAY_NAMES[currentRank],
+      isPlayed: false,
+      isSelected: false,
+      timestamp: Date.now()
+    });
+  }
+
+  const jokerCount = gameMode === 'doudizhu' ? 2 : 4;
+  for (let index = 0; index < jokerCount; index += 1) {
+    const isSmall = gameMode === 'doudizhu' ? index === 0 : index < 2;
+    cards.push({
+      id: `joker-${index}`,
+      rank: isSmall ? Rank.JOKER_SMALL : Rank.JOKER_BIG,
+      isRankCard: false,
+      isWildCard: false,
+      isHearts: false,
+      suit: null,
+      displayName: isSmall ? '小王' : '大王',
+      isPlayed: false,
+      isSelected: false,
+      timestamp: Date.now()
+    });
+  }
+
+  return cards;
+}
+
+const createInitialPlayers = (
+  gameMode: GameMode,
+  landlordPosition?: PlayerPosition
+): Player[] => getActivePlayerPositions(gameMode).map((position, index) => ({
+  id: `p${index + 1}`,
+  name: position === 'bottom'
+    ? '我'
+    : position === 'left'
+      ? '下家'
+      : position === 'right'
+        ? '上家'
+        : '对家',
+  position,
+  team: getModePlayerTeam(gameMode, position, landlordPosition),
+  cards: [],
+  remainingCount: getPlayerInitialCardCount(
+    gameMode,
+    position,
+    landlordPosition
+  ),
+  isCurrentPlayer: position === 'bottom',
+  stats: {
+    playedCards: 0,
+    rankCardCount: 0,
+    wildCardCount: 0,
+    roundWins: 0
+  }
+}));
+
+const createInitialGameState = (
+  gameMode: GameMode = 'guandan',
+  landlordPosition?: PlayerPosition
+): GameState => {
+  // 斗地主把2作为最高普通点数，复用既有强度模型但不生成级牌/配牌。
+  const initialRank: GameRank = gameMode === 'doudizhu' ? 2 : 7;
+  const initialCards = generateSortedCards(initialRank, gameMode);
+
+  return {
+    gameId: `game-${Date.now()}`,
+    status: GameStatus.WAITING,
+    config: {
+      gameMode,
+      landlordPosition,
+      rank: { current: initialRank, next: initialRank, history: [] },
+      tributeEnabled: false
+    },
+    players: createInitialPlayers(gameMode, landlordPosition),
+    currentPlayerPosition: 'bottom',
+    currentRank: initialRank,
+    allCards: initialCards.map(card => ({
+      ...card,
+      isPlayed: false,
+      isSelected: false,
+      timestamp: Date.now()
+    })),
+    playHistory: [],
+    currentRound: {
+      roundNumber: 1,
+      startTime: null,
+      passCount: 0,
+      isFinished: false
+    },
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+};
+
+const createInitialHandInput = (): ActiveSessionSnapshot['handInput'] => ({
+  isInputMode: false,
+  selectedPlayerForInput: null,
+  startingPlayerSelected: false,
+  playerHands: {
+    bottom: [],
+    left: [],
+    top: [],
+    right: []
+  },
+  revealedCards: {
+    bottom: [],
+    left: [],
+    top: [],
+    right: []
+  },
+  gameStarted: false,
+  currentRevealedPlayer: null,
+  inputPurpose: 'hand',
+  revealedTarget: 'left',
+  revealedEntries: []
+});
+
 const App: React.FC = () => {
   // 游戏状态管理
   const [gameState, setGameState] = useState<GameState>(() => {
@@ -144,37 +308,7 @@ const App: React.FC = () => {
       return restoredSession.gameState;
     }
 
-    const initialRank: GameRank = 7;
-    const initialPlayers: Player[] = [
-      { id: 'p1', name: '我', position: 'bottom', team: 1, cards: [], remainingCount: 27, isCurrentPlayer: true, stats: { playedCards: 0, rankCardCount: 0, wildCardCount: 0, roundWins: 0 } },
-      { id: 'p2', name: '下家', position: 'left', team: 2, cards: [], remainingCount: 27, isCurrentPlayer: false, stats: { playedCards: 0, rankCardCount: 0, wildCardCount: 0, roundWins: 0 } },
-      { id: 'p3', name: '对家', position: 'top', team: 1, cards: [], remainingCount: 27, isCurrentPlayer: false, stats: { playedCards: 0, rankCardCount: 0, wildCardCount: 0, roundWins: 0 } },
-      { id: 'p4', name: '上家', position: 'right', team: 2, cards: [], remainingCount: 27, isCurrentPlayer: false, stats: { playedCards: 0, rankCardCount: 0, wildCardCount: 0, roundWins: 0 } },
-    ];
-
-    const initialCards = generateSortedCards(initialRank); // 初始生成所有卡牌
-
-    return {
-      gameId: `game-${Date.now()}`,
-      status: GameStatus.WAITING,
-      config: {
-        rank: { current: initialRank, next: initialRank, history: [] },
-        tributeEnabled: false,
-      },
-      players: initialPlayers,
-      currentPlayerPosition: 'bottom',
-      currentRank: initialRank,
-      allCards: initialCards.map(card => ({ ...card, isPlayed: false, isSelected: false, timestamp: Date.now() })),
-      playHistory: [],
-      currentRound: {
-        roundNumber: 1,
-        startTime: null,
-        passCount: 0,
-        isFinished: false,
-      },
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
+    return createInitialGameState();
   });
 
   // 从gameState中解构常用变量
@@ -185,23 +319,39 @@ const App: React.FC = () => {
     playHistory,
     players
   } = gameState;
-  const gameProgress = getGameProgress(playHistory);
+  const gameMode = getGameMode(gameState);
+  const landlordPosition = gameState.config.landlordPosition;
+  const activePlayerPositions = useMemo(
+    () => getActivePlayerPositions(gameMode),
+    [gameMode]
+  );
+  const progressRules = useMemo(() => ({
+    mode: gameMode,
+    landlordPosition,
+    playerOrder: activePlayerPositions
+  }), [activePlayerPositions, gameMode, landlordPosition]);
+  const getInitialCardCount = useCallback(
+    (position: PlayerPosition) => getPlayerInitialCardCount(
+      gameMode,
+      position,
+      landlordPosition
+    ),
+    [gameMode, landlordPosition]
+  );
+  const gameProgress = getGameProgress(playHistory, progressRules);
   const finishOrder = gameProgress.finishOrder;
 
   const [selectedCards, setSelectedCards] = useState<Set<string>>(
     () => new Set(loadActiveSession()?.selectedCardIds ?? [])
   );
-  const [quickCardText, setQuickCardText] = useState('');
-  const [quickCardError, setQuickCardError] = useState<string | null>(null);
-  const [quickCardNotice, setQuickCardNotice] = useState<string | null>(null);
-  const quickCardInputRef = useRef<HTMLInputElement>(null);
   const [showInstructions, setShowInstructions] = useState(false);
   const [showReplay, setShowReplay] = useState(false);
   const [showGameHistory, setShowGameHistory] = useState(false);
   const [pendingDeleteRecordId, setPendingDeleteRecordId] =
     useState<string | null>(null);
   const [currentReplayGameId, setCurrentReplayGameId] = useState<string | null>(null);
-  const [showAIAssistant, setShowAIAssistant] = useState(true); // AI助手开关
+  // 实战默认只看牌面硬事实和玩家短标签；完整证据面板按需展开。
+  const [showAIAssistant, setShowAIAssistant] = useState(false);
   const [aiEnabled, setAIEnabled] = useState(true);
   const [analysisRefreshVersion, setAnalysisRefreshVersion] = useState(0);
   const reasoningEngine = useMemo(
@@ -256,6 +406,10 @@ const App: React.FC = () => {
     playHistory,
     reasoningEngine
   ]);
+  const inferenceViewModel = useInferenceViewModel(
+    inferenceGameState,
+    analysisResult
+  );
 
   // 回放功能
   const {
@@ -417,28 +571,7 @@ const App: React.FC = () => {
   // 手牌输入状态
   const [handInput, setHandInput] = useState<
     ActiveSessionSnapshot['handInput']
-  >(() => loadActiveSession()?.handInput ?? {
-      isInputMode: false,
-      selectedPlayerForInput: null,
-      startingPlayerSelected: false,
-      playerHands: {
-        bottom: [],
-        left: [],
-        top: [],
-        right: []
-      },
-      revealedCards: {
-        bottom: [],
-        left: [],
-        top: [],
-        right: []
-      },
-      gameStarted: false,
-      currentRevealedPlayer: null,
-      inputPurpose: 'hand',
-      revealedTarget: 'left',
-      revealedEntries: []
-    });
+  >(() => loadActiveSession()?.handInput ?? createInitialHandInput());
 
   useEffect(() => {
     const persistActiveSession = () => {
@@ -528,85 +661,6 @@ const App: React.FC = () => {
     }));
   };
 
-  // 生成竖向排列的牌面 (移到组件外部，确保能访问到顶层导入)
-function generateSortedCards(currentRank: GameRank): Card[] {
-  const cards: Card[] = [];
-  
-  // 排列顺序：2-A (不包括当前级数牌) -> 当前级数牌 -> 大小王
-  const baseRanks = [];
-  for (let rank = 2; rank <= 14; rank++) {
-    if (rank !== currentRank) {
-      baseRanks.push(rank);
-    }
-  }
-  
-  // 先添加普通牌 (2-A，不包括当前级数)
-  // 每个等级8张牌：黑桃2张、红心2张、梅花2张、方块2张
-  baseRanks.forEach(rank => {
-    for (let i = 0; i < 8; i++) {
-      const cardId = `${rank}-${i}`;
-      // 确定花色：0-1黑桃，2-3红心，4-5梅花，6-7方块
-      const suitIndex = Math.floor(i / 2);
-      const suits = [Suit.SPADES, Suit.HEARTS, Suit.CLUBS, Suit.DIAMONDS];
-      const isHearts = suits[suitIndex] === Suit.HEARTS;
-      
-      cards.push({
-        id: cardId,
-        rank: rank as Rank,
-        isRankCard: false,
-        isWildCard: false,
-        isHearts, // 添加红心标识
-        suit: suits[suitIndex], // 添加花色信息
-        displayName: RANK_DISPLAY_NAMES[rank as Rank],
-        isPlayed: false,
-        isSelected: false,
-        timestamp: Date.now(),
-      });
-    }
-  });
-  
-  // 添加当前级数牌（每种花色各2张，红心级牌为2张配牌）
-  for (let i = 0; i < 8; i++) {
-    const cardId = `${currentRank}-${i}`;
-    // 确定花色：0-1黑桃，2-3红心，4-5梅花，6-7方块
-    const suitIndex = Math.floor(i / 2);
-    const suits = [Suit.SPADES, Suit.HEARTS, Suit.CLUBS, Suit.DIAMONDS];
-    const isHearts = suits[suitIndex] === Suit.HEARTS;
-    const isWildCard = isHearts;
-    
-    cards.push({
-      id: cardId,
-      rank: currentRank,
-      isRankCard: true,
-      isWildCard,
-      isHearts, // 添加红心标识
-      suit: suits[suitIndex], // 添加花色信息
-      displayName: RANK_DISPLAY_NAMES[currentRank as Rank],
-      isPlayed: false,
-      isSelected: false,
-      timestamp: Date.now(),
-    });
-  }
-  
-  // 添加大小王（王牌不是红心配牌）
-  for (let i = 0; i < 4; i++) {
-    cards.push({
-      id: `joker-${i}`,
-      rank: i < 2 ? Rank.JOKER_SMALL : Rank.JOKER_BIG,
-      isRankCard: false,
-      isWildCard: false,
-      isHearts: false, // 大小王不是红心
-      suit: null, // 特殊花色
-      displayName: i < 2 ? '小王' : '大王',
-      isPlayed: false,
-      isSelected: false,
-      timestamp: Date.now(),
-    });
-  }
-  
-  return cards;
-}
-
   // 选择模式和拖拽状态
   const [isDragging, setIsDragging] = useState(false);
   const isDraggingRef = useRef(false);
@@ -636,10 +690,10 @@ function generateSortedCards(currentRank: GameRank): Card[] {
 
   // 玩家颜色设置
   const [playerColors] = useState({
-    bottom: '#ef4444', // 红色
-    left: '#10b981',   // 绿色
-    top: '#000000',    // 黑色
-    right: '#3b82f6'   // 蓝色
+    bottom: '#f59e0b', // 我：黄色
+    left: '#2563eb',   // 下家：蓝色
+    top: '#7c3aed',    // 对家：紫色
+    right: '#16a34a'   // 上家：绿色
   });
 
   // 检测触摸设备
@@ -704,7 +758,7 @@ function generateSortedCards(currentRank: GameRank): Card[] {
 
       return {
         played: playedCount,
-        remaining: Math.max(0, 27 - playedCount),
+        remaining: Math.max(0, getInitialCardCount(playerPos) - playedCount),
         revealed: revealedCount
       };
     } else {
@@ -713,8 +767,10 @@ function generateSortedCards(currentRank: GameRank): Card[] {
         .filter(record => record.playerPosition === playerPos)
         .reduce((total, record) => total + record.cards.length, 0);
 
-      // 在没有设置手牌的情况下，假设每个玩家有27张牌
-      const remainingCount = Math.max(0, 27 - playedCount);
+      const remainingCount = Math.max(
+        0,
+        getInitialCardCount(playerPos) - playedCount
+      );
 
       return {
         played: playedCount,
@@ -788,6 +844,13 @@ function generateSortedCards(currentRank: GameRank): Card[] {
   };
 
   const selectActivePlayer = (playerPosition: PlayerPosition) => {
+    if (
+      gameMode === 'doudizhu' &&
+      gameState.status === GameStatus.INPUT &&
+      playerPosition !== landlordPosition
+    ) {
+      return;
+    }
     const playerHasFinished =
       finishOrder.includes(playerPosition) &&
       (gameState.status === GameStatus.PLAYING ||
@@ -814,140 +877,6 @@ function generateSortedCards(currentRank: GameRank): Card[] {
       .map(card => card.id)
   );
 
-  const handleQuickTextSubmit = () => {
-    const parsedCommand = parseQuickPlayCommand(quickCardText);
-    if (parsedCommand.error) {
-      setQuickCardError(parsedCommand.error);
-      setQuickCardNotice(null);
-      return;
-    }
-
-    if (
-      handInput.isInputMode &&
-      parsedCommand.playerPosition &&
-      parsedCommand.playerPosition !== 'bottom'
-    ) {
-      setQuickCardError('手牌输入只录入我自己的牌，不能指定其他三家');
-      setQuickCardNotice(null);
-      return;
-    }
-
-    const commandPlayer: PlayerPosition | null = handInput.isInputMode
-      ? 'bottom'
-      : parsedCommand.playerPosition ?? selectedPlayer;
-
-    if (parsedCommand.action === 'pass') {
-      if (gameState.status !== GameStatus.PLAYING || !commandPlayer) {
-        setQuickCardError('游戏开始后才能记录过牌');
-        setQuickCardNotice(null);
-        return;
-      }
-
-      if (!switchToNextPlayer(commandPlayer, true)) {
-        setQuickCardError(`${getPlayerDisplayName(commandPlayer)}已经出完牌或本局已经结束`);
-        setQuickCardNotice(null);
-        return;
-      }
-      setSelectedCards(new Set());
-      setQuickCardText('');
-      setQuickCardError(null);
-      setQuickCardNotice(`已记录${getPlayerDisplayName(commandPlayer)}过牌`);
-      requestAnimationFrame(() => quickCardInputRef.current?.focus());
-      return;
-    }
-
-    if (!commandPlayer) {
-      setQuickCardError('请先选择要录入手牌的玩家');
-      setQuickCardNotice(null);
-      return;
-    }
-
-    const shouldCommitImmediately = shouldCommitQuickPlay(
-      parsedCommand,
-      gameState.status === GameStatus.PLAYING
-    );
-
-    if (parsedCommand.commitImmediately && gameState.status !== GameStatus.PLAYING) {
-      setQuickCardError(
-        handInput.isInputMode
-          ? '手牌录入时请省略“出”，选好后再确认'
-          : '请先开始游戏再直接记录出牌'
-      );
-      setQuickCardNotice(null);
-      return;
-    }
-
-    const currentSelectionPlayer = handInput.isInputMode
-      ? handInput.selectedPlayerForInput as PlayerPosition | null
-      : selectedPlayer;
-    const shouldReplaceSelection = shouldCommitImmediately ||
-      (parsedCommand.explicitPlayer && commandPlayer !== currentSelectionPlayer);
-    const baseSelection = shouldReplaceSelection
-      ? new Set<string>()
-      : selectedCards;
-
-    if (handInput.isInputMode) {
-      const maxCards = commandPlayer === 'bottom' ? 27 : 1;
-      const projectedCount = handInput.playerHands[commandPlayer].length +
-        baseSelection.size +
-        parsedCommand.ranks.length;
-      if (projectedCount > maxCards) {
-        setQuickCardError(`${commandPlayer === 'bottom' ? '我' : '其他玩家'}最多可录入${maxCards}张`);
-        setQuickCardNotice(null);
-        return;
-      }
-    }
-
-    const blockedIds = handInput.isInputMode ? getAssignedCardIds() : new Set<string>();
-    const selectionResult = pickCardsByRanks(
-      allCards,
-      baseSelection,
-      parsedCommand.ranks,
-      cardId => isCardSelectableForPlayer(cardId, commandPlayer),
-      blockedIds
-    );
-
-    if (!selectionResult.success) {
-      setQuickCardError(
-        `${RANK_DISPLAY_NAMES[selectionResult.missingRank!]}的可用牌不足，当前选择未改变`
-      );
-      setQuickCardNotice(null);
-      return;
-    }
-
-    if (shouldCommitImmediately) {
-      const playError = recordPlayedCards(selectionResult.selectedIds, commandPlayer);
-      if (playError) {
-        setQuickCardError(playError);
-        setQuickCardNotice(null);
-        return;
-      }
-      const cardLabel = parsedCommand.ranks
-        .map(rank => RANK_DISPLAY_NAMES[rank])
-        .join(' ');
-      setQuickCardNotice(`极速记录：${getPlayerDisplayName(commandPlayer)}出${cardLabel}`);
-    } else {
-      if (handInput.isInputMode && parsedCommand.explicitPlayer) {
-        setHandInput(previous => ({
-          ...previous,
-          selectedPlayerForInput: commandPlayer
-        }));
-      } else if (!handInput.isInputMode && parsedCommand.explicitPlayer) {
-        setGameState(previous => ({
-          ...previous,
-          currentPlayerPosition: commandPlayer,
-          updatedAt: Date.now()
-        }));
-      }
-      setSelectedCards(selectionResult.selectedIds);
-      setQuickCardNotice(null);
-    }
-
-    setQuickCardText('');
-    setQuickCardError(null);
-    requestAnimationFrame(() => quickCardInputRef.current?.focus());
-  };
-
   // 处理卡牌选择
   const handleCardSelect = (cardId: string, forceMultiSelect: boolean = false) => {
     if (gameState.status === GameStatus.FINISHED) {
@@ -959,7 +888,7 @@ function generateSortedCards(currentRank: GameRank): Card[] {
         gameState.status === GameStatus.FINISHED) &&
       !handInput.startingPlayerSelected
     ) {
-      alert('请先点击上方四家牌面，选择实际出牌方');
+      alert(`请先点击上方${gameMode === 'doudizhu' ? '三家' : '四家'}牌面，选择实际出牌方`);
       return;
     }
 
@@ -1052,7 +981,7 @@ function generateSortedCards(currentRank: GameRank): Card[] {
         gameState.status === GameStatus.FINISHED) &&
       !handInput.startingPlayerSelected
     ) {
-      alert('请先点击上方四家牌面，选择实际出牌方');
+      alert(`请先点击上方${gameMode === 'doudizhu' ? '三家' : '四家'}牌面，选择实际出牌方`);
       return;
     }
 
@@ -1291,7 +1220,53 @@ function generateSortedCards(currentRank: GameRank): Card[] {
   };
 
   // 手牌输入模式控制函数
+  const switchGameMode = (nextMode: GameMode) => {
+    if (nextMode === gameMode) return;
+    if (gameState.status !== GameStatus.WAITING) return;
+
+    setGameState(createInitialGameState(nextMode));
+    setHandInput(createInitialHandInput());
+    setSelectedCards(new Set());
+    setShowAIAssistant(false);
+  };
+
+  const selectLandlord = (position: PlayerPosition) => {
+    if (gameMode !== 'doudizhu' || gameState.status !== GameStatus.WAITING) {
+      return;
+    }
+    if (!activePlayerPositions.includes(position)) return;
+
+    setGameState(previous => ({
+      ...previous,
+      config: {
+        ...previous.config,
+        landlordPosition: position
+      },
+      players: previous.players.map(player => ({
+        ...player,
+        team: getModePlayerTeam('doudizhu', player.position, position),
+        remainingCount: getPlayerInitialCardCount(
+          'doudizhu',
+          player.position,
+          position
+        ),
+        isCurrentPlayer: player.position === position
+      })),
+      currentPlayerPosition: position,
+      updatedAt: Date.now()
+    }));
+    setHandInput(previous => ({
+      ...previous,
+      revealedTarget: position,
+      startingPlayerSelected: true
+    }));
+  };
+
   const startHandInput = () => {
+    if (gameMode === 'doudizhu' && !landlordPosition) {
+      alert('请先选择地主是谁');
+      return;
+    }
     setGameState(prev => ({
       ...prev,
       status: GameStatus.INPUT,
@@ -1301,7 +1276,7 @@ function generateSortedCards(currentRank: GameRank): Card[] {
       ...prev,
       isInputMode: true,
       selectedPlayerForInput: 'bottom',
-      startingPlayerSelected: false,
+      startingPlayerSelected: gameMode === 'doudizhu',
       playerHands: {
         ...prev.playerHands,
         left: [],
@@ -1315,7 +1290,9 @@ function generateSortedCards(currentRank: GameRank): Card[] {
         right: []
       },
       inputPurpose: 'hand',
-      revealedTarget: 'left',
+      revealedTarget: gameMode === 'doudizhu'
+        ? (landlordPosition ?? 'bottom')
+        : 'left',
       revealedEntries: []
     }));
   };
@@ -1347,6 +1324,10 @@ function generateSortedCards(currentRank: GameRank): Card[] {
       alert('请先录入我的手牌！\n\n操作步骤：\n1. 点击下方实体牌\n2. 点击“确认手牌”\n3. 点击“确认开始”');
       return;
     }
+    if (gameMode === 'doudizhu' && !landlordPosition) {
+      alert('请先选择地主是谁');
+      return;
+    }
 
     console.log('开始游戏...');
 
@@ -1359,7 +1340,7 @@ function generateSortedCards(currentRank: GameRank): Card[] {
         return {
           ...player,
           cards: [...knownCards],
-          remainingCount: 27,
+          remainingCount: getInitialCardCount(player.position),
           stats: {
             ...player.stats,
             rankCardCount: knownCards.filter(card => card.rank === currentRank).length,
@@ -1386,62 +1367,9 @@ function generateSortedCards(currentRank: GameRank): Card[] {
     if (isCurrentGameImportant) {
       saveCurrentReplaySnapshot(true);
     }
-    setGameState(() => {
-      const initialRank: GameRank = 7;
-      const initialPlayers: Player[] = [
-        { id: 'p1', name: '我', position: 'bottom', team: 1, cards: [], remainingCount: 27, isCurrentPlayer: true, stats: { playedCards: 0, rankCardCount: 0, wildCardCount: 0, roundWins: 0 } },
-        { id: 'p2', name: '下家', position: 'left', team: 2, cards: [], remainingCount: 27, isCurrentPlayer: false, stats: { playedCards: 0, rankCardCount: 0, wildCardCount: 0, roundWins: 0 } },
-        { id: 'p3', name: '对家', position: 'top', team: 1, cards: [], remainingCount: 27, isCurrentPlayer: false, stats: { playedCards: 0, rankCardCount: 0, wildCardCount: 0, roundWins: 0 } },
-        { id: 'p4', name: '上家', position: 'right', team: 2, cards: [], remainingCount: 27, isCurrentPlayer: false, stats: { playedCards: 0, rankCardCount: 0, wildCardCount: 0, roundWins: 0 } },
-      ];
+    setGameState(createInitialGameState(gameMode));
 
-      const initialCards = generateSortedCards(initialRank);
-
-      return {
-        gameId: `game-${Date.now()}`,
-        status: GameStatus.WAITING,
-        config: {
-          rank: { current: initialRank, next: initialRank, history: [] },
-          tributeEnabled: false,
-        },
-        players: initialPlayers,
-        currentPlayerPosition: 'bottom',
-        currentRank: initialRank,
-        allCards: initialCards.map(card => ({ ...card, isPlayed: false, isSelected: false, timestamp: Date.now() })),
-        playHistory: [],
-        currentRound: {
-          roundNumber: 1,
-          startTime: null,
-          passCount: 0,
-          isFinished: false,
-        },
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      };
-    });
-
-    setHandInput({
-      isInputMode: false,
-      selectedPlayerForInput: null,
-      startingPlayerSelected: false,
-      playerHands: {
-        bottom: [],
-        left: [],
-        top: [],
-        right: []
-      },
-      revealedCards: {
-        bottom: [],
-        left: [],
-        top: [],
-        right: []
-      },
-      gameStarted: false,
-      currentRevealedPlayer: null,
-      inputPurpose: 'hand',
-      revealedTarget: 'left',
-      revealedEntries: []
-    });
+    setHandInput(createInitialHandInput());
 
     setSelectedCards(new Set());
   };
@@ -1482,7 +1410,7 @@ function generateSortedCards(currentRank: GameRank): Card[] {
         description: `${currentPlayer} 过牌`
       } : null;
       const nextPassCount = passRecord ? prev.currentRound.passCount + 1 : 0;
-      const shouldResetTrick = nextPassCount >= 3;
+      const shouldResetTrick = nextPassCount >= activePlayerPositions.length - 1;
 
       return {
         ...prev,
@@ -1501,17 +1429,18 @@ function generateSortedCards(currentRank: GameRank): Card[] {
     return true;
   };
 
-  // 获取下一个玩家（按掼蛋规则：我→下家→对家→上家）
+  // 按当前游戏座位顺序获取下一位未出完玩家。
   const getNextPlayer = (
     currentPlayer: PlayerPosition,
     history: PlayRecord[] = playHistory
   ): PlayerPosition =>
-    getNextEligiblePlayer(currentPlayer, history);
+    getNextEligiblePlayer(currentPlayer, history, progressRules);
 
   // 原子记录一次有效出牌，供确认按钮、文本快捷指令共同调用。
   const recordPlayedCards = (
     cardIds: ReadonlySet<string>,
-    playerPosition: PlayerPosition
+    playerPosition: PlayerPosition,
+    implicitPassPlayers: PlayerPosition[] = []
   ): string | null => {
     if (gameState.status === GameStatus.FINISHED) {
       return '本局已经结束，如需修正请先撤销最后一次操作';
@@ -1522,7 +1451,8 @@ function generateSortedCards(currentRank: GameRank): Card[] {
       return '没有可记录的牌';
     }
     const remainingCards =
-      CARDS_PER_PLAYER - getPlayedCardCount(playHistory, playerPosition);
+      getInitialCardCount(playerPosition) -
+      getPlayedCardCount(playHistory, playerPosition);
     if (remainingCards <= 0) {
       return `${getPlayerDisplayName(playerPosition)}已经出完牌`;
     }
@@ -1530,22 +1460,44 @@ function generateSortedCards(currentRank: GameRank): Card[] {
       return `${getPlayerDisplayName(playerPosition)}只剩${remainingCards}张，不能记录${selectedCardObjects.length}张`;
     }
 
-    const validation = validateCardType(selectedCardObjects, currentRank);
+    const validation = gameMode === 'doudizhu'
+      ? validateDoudizhuCardType(selectedCardObjects)
+      : validateCardType(selectedCardObjects, currentRank);
     if (!validation.isValid) {
       return `出牌错误：${validation.description}`;
     }
 
     const timestamp = Date.now();
+    const operationId = implicitPassPlayers.length > 0
+      ? `voice-${timestamp}-${playerPosition}`
+      : undefined;
+    const implicitPassRecords: PlayRecord[] = implicitPassPlayers.map(
+      (position, index) => ({
+        id: `pass-${timestamp}-${index}-${position}`,
+        playerPosition: position,
+        cards: [],
+        type: 'pass',
+        timestamp: timestamp + index,
+        isActivePlay: false,
+        operationId,
+        description: `${position} 过牌（语音自动补记）`
+      })
+    );
     const newPlayRecord: PlayRecord = {
-      id: `play-${timestamp}`,
+      id: `play-${timestamp}-${playerPosition}`,
       playerPosition,
       cards: selectedCardObjects,
       type: normalizePlayType(validation.type, selectedCardObjects.length),
-      timestamp,
+      timestamp: timestamp + implicitPassRecords.length,
       isActivePlay: true,
+      operationId,
       description: `${playerPosition} 出了${selectedCardObjects.length}张牌 (${validation.description})`
     };
-    const nextHistory = [...playHistory, newPlayRecord];
+    const nextHistory = [
+      ...playHistory,
+      ...implicitPassRecords,
+      newPlayRecord
+    ];
     const nextPlayer = getNextPlayer(playerPosition, nextHistory);
 
     setHandInput(previous => ({
@@ -1556,7 +1508,11 @@ function generateSortedCards(currentRank: GameRank): Card[] {
     setGameState(previous => ({
       ...previous,
       currentPlayerPosition: nextPlayer,
-      playHistory: [...previous.playHistory, newPlayRecord],
+      playHistory: [
+        ...previous.playHistory,
+        ...implicitPassRecords,
+        newPlayRecord
+      ],
       allCards: previous.allCards.map(card =>
         cardIds.has(card.id) ? { ...card, isPlayed: true } : card
       ),
@@ -1570,7 +1526,7 @@ function generateSortedCards(currentRank: GameRank): Card[] {
           ...player,
           remainingCount: Math.max(
             0,
-            CARDS_PER_PLAYER - playedCardCount
+            getInitialCardCount(playerPosition) - playedCardCount
           ),
           stats: {
             ...player.stats,
@@ -1591,20 +1547,18 @@ function generateSortedCards(currentRank: GameRank): Card[] {
     return null;
   };
 
-  // 连续语音与文字极速输入共用同一套点数选牌和牌型校验，成功后直接记牌。
+  // 连续语音输入使用点数选牌和牌型校验，成功后直接记牌。
   const handleVoiceCommand = (
     command: VoiceCommandAction
   ): VoiceCommandOutcome => {
-    const fail = (message: string): VoiceCommandOutcome => {
-      setQuickCardError(message);
-      setQuickCardNotice(null);
-      return { success: false, message };
-    };
-    const succeed = (message: string): VoiceCommandOutcome => {
-      setQuickCardError(null);
-      setQuickCardNotice(message);
-      return { success: true, message };
-    };
+    const fail = (message: string): VoiceCommandOutcome => ({
+      success: false,
+      message
+    });
+    const succeed = (message: string): VoiceCommandOutcome => ({
+      success: true,
+      message
+    });
 
     if (command.action === 'undo') {
       if (playHistory.length === 0) {
@@ -1622,6 +1576,13 @@ function generateSortedCards(currentRank: GameRank): Card[] {
     if (!command.playerPosition) {
       return fail('语音口令缺少玩家位置，本次未记录');
     }
+    if (!activePlayerPositions.includes(command.playerPosition)) {
+      return fail(
+        gameMode === 'doudizhu'
+          ? '斗地主只支持我、下家、上家，本次未记录'
+          : '该玩家不在当前牌局中，本次未记录'
+      );
+    }
 
     if (command.action === 'pass') {
       if (!switchToNextPlayer(command.playerPosition, true)) {
@@ -1637,15 +1598,53 @@ function generateSortedCards(currentRank: GameRank): Card[] {
       return fail('没有识别到有效牌面，本次未记录');
     }
 
-    const selectionResult = pickCardsByRanks(
+    const implicitPassPlayers =
+      handInput.startingPlayerSelected &&
+      gameState.currentRound.currentMaxPlay
+          ? getSkippedPlayersBeforeTarget(
+            selectedPlayer,
+            command.playerPosition,
+            playHistory,
+            progressRules
+          )
+        : [];
+    if (implicitPassPlayers === null) {
+      return fail(
+        `${getPlayerDisplayName(command.playerPosition)}当前不能出牌，本次未记录`
+      );
+    }
+
+    const explicitWildCardRanks = command.wildCardRanks ?? [];
+    if (explicitWildCardRanks.length > 0) {
+      if (gameMode !== 'guandan') {
+        return fail('斗地主模式不支持红心配牌口令，本次未记录');
+      }
+      const mismatchedWildRank = explicitWildCardRanks.find(
+        rank => rank !== currentRank
+      );
+      if (mismatchedWildRank !== undefined) {
+        return fail(
+          `当前打${RANK_DISPLAY_NAMES[currentRank]}，` +
+          `红心${RANK_DISPLAY_NAMES[mismatchedWildRank]}不是配牌，本次未记录`
+        );
+      }
+    }
+
+    const selectionResult = pickCardsByVoiceRanks(
       allCards,
-      new Set<string>(),
       command.ranks,
+      explicitWildCardRanks,
       cardId => isCardSelectableForPlayer(cardId, command.playerPosition!),
       new Set<string>()
     );
 
     if (!selectionResult.success) {
+      if (selectionResult.missingExplicitWildCard) {
+        return fail(
+          `${getPlayerDisplayName(command.playerPosition)}可用的红心` +
+          `${RANK_DISPLAY_NAMES[selectionResult.missingRank!]}配牌不足，本次未记录`
+        );
+      }
       return fail(
         `${getPlayerDisplayName(command.playerPosition)}可用的` +
         `${RANK_DISPLAY_NAMES[selectionResult.missingRank!]}不足，本次未记录`
@@ -1654,7 +1653,8 @@ function generateSortedCards(currentRank: GameRank): Card[] {
 
     const playError = recordPlayedCards(
       selectionResult.selectedIds,
-      command.playerPosition
+      command.playerPosition,
+      implicitPassPlayers
     );
     if (playError) {
       return fail(playError);
@@ -1663,8 +1663,13 @@ function generateSortedCards(currentRank: GameRank): Card[] {
     const cardLabel = command.ranks
       .map(rank => RANK_DISPLAY_NAMES[rank])
       .join(' ');
+    const passNotice = implicitPassPlayers.length > 0
+      ? `；已自动补记${implicitPassPlayers
+          .map(getPlayerDisplayName)
+          .join('、')}过牌`
+      : '';
     return succeed(
-      `语音记录：${getPlayerDisplayName(command.playerPosition)}出${cardLabel}`
+      `语音记录：${getPlayerDisplayName(command.playerPosition)}出${cardLabel}${passNotice}`
     );
   };
 
@@ -1722,15 +1727,24 @@ function generateSortedCards(currentRank: GameRank): Card[] {
 
       if (
         inputPurpose === 'revealed' &&
-        handInput.revealedTarget !== 'bottom'
+        (handInput.revealedTarget !== 'bottom' || gameMode === 'doudizhu')
       ) {
         const entries = handInput.revealedEntries as RevealedCardRecord[];
         const target = handInput.revealedTarget as PlayerPosition;
+        const revealedLimit = gameMode === 'doudizhu' ? 3 : 4;
 
-        if (entries.length >= 4) {
-          alert('全桌最多设置4张明牌');
+        if (entries.length >= revealedLimit) {
+          alert(
+            gameMode === 'doudizhu'
+              ? '斗地主最多设置3张底牌'
+              : '全桌最多设置4张明牌'
+          );
           setSelectedCards(new Set());
           resetMultiSelectMode();
+          return;
+        }
+        if (gameMode === 'doudizhu' && target !== landlordPosition) {
+          alert('斗地主底牌必须归属地主');
           return;
         }
         if (selectedCards.size !== 1) {
@@ -1748,16 +1762,20 @@ function generateSortedCards(currentRank: GameRank): Card[] {
         const targetCount = entries.filter(
           entry => entry.playerPosition === target
         ).length;
-        if (targetCount >= 2) {
-          alert(`${getPlayerDisplayName(target)}最多只能设置2张明牌`);
+        if (targetCount >= (gameMode === 'doudizhu' ? 3 : 2)) {
+          alert(
+            gameMode === 'doudizhu'
+              ? '地主最多设置3张底牌'
+              : `${getPlayerDisplayName(target)}最多只能设置2张明牌`
+          );
           return;
         }
 
-        const doubleHolder = (
+        const doubleHolder = gameMode === 'guandan' ? (
           ['left', 'top', 'right'] as PlayerPosition[]
         ).find(position =>
           entries.filter(entry => entry.playerPosition === position).length >= 2
-        );
+        ) : undefined;
         if (targetCount === 1 && doubleHolder && doubleHolder !== target) {
           alert(
             `${getPlayerDisplayName(doubleHolder)}已经设置2张明牌，` +
@@ -1803,7 +1821,7 @@ function generateSortedCards(currentRank: GameRank): Card[] {
       const playerPos: PlayerPosition = 'bottom';
       const currentCards = handInput.playerHands[playerPos];
 
-      const maxCards = 27;
+      const maxCards = getInitialCardCount('bottom');
 
       if (currentCards.length + selectedCardIds.length > maxCards) {
         alert(`我的手牌最多只能录入${maxCards}张！`);
@@ -1865,59 +1883,8 @@ function generateSortedCards(currentRank: GameRank): Card[] {
       return; // 没有可撤销的出牌时静默返回
     }
 
-    const lastPlay = playHistory[playHistory.length - 1];
-
-    // 撤销最后一个动作（包括过牌），并恢复牌权及当前最大出牌。
-    setGameState(prev => {
-      const remainingHistory = prev.playHistory.slice(0, -1);
-      const previousActivePlay = [...remainingHistory]
-        .reverse()
-        .find(record => record.cards.length > 0);
-      let restoredPassCount = 0;
-      for (let index = remainingHistory.length - 1; index >= 0; index--) {
-        if (remainingHistory[index].type !== 'pass') break;
-        restoredPassCount += 1;
-      }
-
-      return {
-        ...prev,
-        status:
-          prev.status === GameStatus.FINISHED
-            ? GameStatus.PLAYING
-            : prev.status,
-        allCards: prev.allCards.map(card =>
-          lastPlay.cards.some(lc => lc.id === card.id) ? { ...card, isPlayed: false } : card
-        ),
-        players: prev.players.map(player => {
-          if (player.position === lastPlay.playerPosition && lastPlay.cards.length > 0) {
-            const playedCardCount = getPlayedCardCount(
-              remainingHistory,
-              player.position
-            );
-            return {
-              ...player,
-              remainingCount: Math.max(
-                0,
-                CARDS_PER_PLAYER - playedCardCount
-              ),
-              stats: {
-                ...player.stats,
-                playedCards: playedCardCount
-              }
-            };
-          }
-          return player;
-        }),
-        currentPlayerPosition: lastPlay.playerPosition,
-        playHistory: remainingHistory,
-        currentRound: {
-          ...prev.currentRound,
-          currentMaxPlay: previousActivePlay,
-          passCount: restoredPassCount
-        },
-        updatedAt: Date.now(),
-      };
-    });
+    // 同一语音操作产生的隐式过牌和实际出牌作为一个原子操作撤销。
+    setGameState(previous => undoLastGameOperation(previous));
 
     // 直接完成撤销，不显示提示
   };
@@ -1956,7 +1923,7 @@ function generateSortedCards(currentRank: GameRank): Card[] {
         isGameEnd,
         finishOrder: winners,
         winningTeam
-      } = getGameProgress(playHistory);
+      } = getGameProgress(playHistory, progressRules);
       if (isGameEnd) {
         setGameState(prev => ({
           ...prev,
@@ -1966,7 +1933,12 @@ function generateSortedCards(currentRank: GameRank): Card[] {
 
         let gameEndMessage = '🎉 游戏结束！\n';
 
-        if (winningTeam) {
+        if (gameMode === 'doudizhu') {
+          const landlordWon = winners[0] === landlordPosition;
+          gameEndMessage += landlordWon
+            ? `🏆 地主${getPlayerDisplayName(landlordPosition!)}胜利！\n`
+            : '🏆 农民胜利！\n';
+        } else if (winningTeam) {
           // 团队胜利
           if (winningTeam === 1) {
             gameEndMessage += '🏆 我和对家包揽头游、二游！\n';
@@ -2003,8 +1975,11 @@ function generateSortedCards(currentRank: GameRank): Card[] {
       }
     }
   }, [
+    gameMode,
     gameState.status,
     gameState.currentRound.startTime,
+    landlordPosition,
+    progressRules,
     playHistory
   ]);
 
@@ -2016,7 +1991,55 @@ function generateSortedCards(currentRank: GameRank): Card[] {
       <header className="border-b border-gray-200 bg-white px-2 py-2 shadow-sm sm:px-4 sm:py-3">
         <div className="mx-auto flex max-w-6xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap items-center gap-2 sm:gap-4">
-            <h1 className="whitespace-nowrap text-lg font-bold text-gray-800 sm:text-xl">掼蛋记牌器</h1>
+            <h1 className="whitespace-nowrap text-lg font-bold text-gray-800 sm:text-xl">
+              {gameMode === 'doudizhu' ? '斗地主记牌器' : '掼蛋记牌器'}
+            </h1>
+
+            <div className="flex rounded-lg bg-slate-100 p-1">
+              {([['guandan', '掼蛋'], ['doudizhu', '斗地主']] as Array<[GameMode, string]>).map(
+                ([mode, label]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => switchGameMode(mode)}
+                    disabled={gameState.status !== GameStatus.WAITING}
+                    className={`min-h-9 rounded-md px-3 text-sm font-bold transition-colors ${
+                      gameMode === mode
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'text-slate-600 hover:bg-white'
+                    } disabled:cursor-not-allowed disabled:opacity-60`}
+                  >
+                    {label}
+                  </button>
+                )
+              )}
+            </div>
+
+            {gameMode === 'doudizhu' && (
+              gameState.status === GameStatus.WAITING ? (
+                <div className="flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 p-1">
+                  <span className="px-1 text-xs font-bold text-amber-900">地主：</span>
+                  {activePlayerPositions.map(position => (
+                    <button
+                      key={`landlord-${position}`}
+                      type="button"
+                      onClick={() => selectLandlord(position)}
+                      className={`min-h-8 rounded px-2 text-xs font-black ${
+                        landlordPosition === position
+                          ? 'bg-amber-500 text-white'
+                          : 'bg-white text-amber-900'
+                      }`}
+                    >
+                      {getPlayerDisplayName(position)}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-lg bg-amber-100 px-2 py-1 text-sm font-bold text-amber-900">
+                  地主：{landlordPosition ? getPlayerDisplayName(landlordPosition) : '未选择'}
+                </div>
+              )
+            )}
 
             {/* 游戏状态信息 */}
             {(gameState.status === GameStatus.PLAYING || gameState.status === GameStatus.FINISHED) && (
@@ -2029,6 +2052,11 @@ function generateSortedCards(currentRank: GameRank): Card[] {
                   {gameState.status === GameStatus.FINISHED ?
                     (() => {
                       const { winningTeam } = checkGameEnd();
+                      if (gameMode === 'doudizhu') {
+                        return finishOrder[0] === landlordPosition
+                          ? `🏆 地主${getPlayerDisplayName(landlordPosition!)}胜利`
+                          : '🏆 农民胜利';
+                      }
                       if (winningTeam === 1) return '🏆 我和对家胜利';
                       if (winningTeam === 2) return '😔 下家和上家胜利';
                       return '🏆 游戏结束';
@@ -2049,6 +2077,7 @@ function generateSortedCards(currentRank: GameRank): Card[] {
             )}
 
             {/* 级数选择 */}
+            {gameMode === 'guandan' && (
             <div className="flex items-center gap-2 rounded-lg bg-white p-1.5 shadow-sm sm:p-2">
               <span className="text-sm font-medium text-gray-700">打几:</span>
               <select
@@ -2071,6 +2100,7 @@ function generateSortedCards(currentRank: GameRank): Card[] {
                 ))}
               </select>
             </div>
+            )}
           </div>
 
           <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap">
@@ -2087,7 +2117,37 @@ function generateSortedCards(currentRank: GameRank): Card[] {
               </div>
             ) : gameState.status === GameStatus.INPUT ? (
               // 手牌输入模式
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {gameMode === 'doudizhu' && (
+                  <div
+                    data-testid="doudizhu-opening-input-switch"
+                    className="flex rounded-lg border border-amber-200 bg-amber-50 p-1"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setInputPurpose('hand')}
+                      className={`min-h-9 rounded-md px-3 text-sm font-bold transition-colors ${
+                        handInput.inputPurpose === 'hand'
+                          ? 'bg-orange-600 text-white shadow-sm'
+                          : 'bg-white text-orange-800'
+                      }`}
+                    >
+                      录我的手牌
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="doudizhu-bottom-cards-button"
+                      onClick={() => setInputPurpose('revealed')}
+                      className={`min-h-9 rounded-md px-3 text-sm font-bold transition-colors ${
+                        handInput.inputPurpose === 'revealed'
+                          ? 'bg-red-600 text-white shadow-sm'
+                          : 'bg-white text-red-700'
+                      }`}
+                    >
+                      录地主底牌
+                    </button>
+                  </div>
+                )}
                 <button
                   onClick={startGame}
                   className={`min-h-11 rounded px-2 py-2 text-sm transition-colors sm:min-h-0 sm:px-3 ${
@@ -2115,9 +2175,12 @@ function generateSortedCards(currentRank: GameRank): Card[] {
               <div className="flex items-center gap-2">
                 <button
                   onClick={startHandInput}
-                  className="min-h-11 rounded bg-green-500 px-2 py-2 text-sm text-white transition-colors hover:bg-green-600 sm:min-h-0 sm:px-3"
+                  disabled={gameMode === 'doudizhu' && !landlordPosition}
+                  className="min-h-11 rounded bg-green-500 px-2 py-2 text-sm text-white transition-colors hover:bg-green-600 disabled:cursor-not-allowed disabled:bg-gray-400 sm:min-h-0 sm:px-3"
                 >
-                  🎮 开始游戏
+                  🎮 {gameMode === 'doudizhu' && !landlordPosition
+                    ? '请先选择地主'
+                    : '开始游戏'}
                 </button>
               </div>
             )}
@@ -2177,13 +2240,21 @@ function generateSortedCards(currentRank: GameRank): Card[] {
               🤖 AI助手
             </button>
 
+            <a
+              href="/clear-cache.html"
+              className="inline-flex min-h-11 items-center rounded border border-amber-200 bg-amber-50 px-2 py-2 text-sm font-bold text-amber-800 transition-colors hover:bg-amber-100 sm:min-h-0 sm:px-3"
+              title="更新程序缓存并保留牌局数据"
+            >
+              ↻ 更新
+            </a>
+
             <button
               type="button"
               onClick={() => setShowInstructions(true)}
               className="min-h-11 rounded border border-sky-200 bg-sky-50 px-2 py-2 text-sm font-bold text-sky-800 transition-colors hover:bg-sky-100 sm:min-h-0 sm:px-3"
-              title="查看程序作用和完整操作步骤"
+              title="查看程序使用方法和语音输入规则"
             >
-              ？作用说明
+              ？使用说明
             </button>
           </div>
         </div>
@@ -2193,7 +2264,7 @@ function generateSortedCards(currentRank: GameRank): Card[] {
       <main className="max-w-6xl mx-auto p-4">
         <div className="space-y-4">
           {/* 玩家信息区域 */}
-          <div className="grid grid-cols-4 gap-2">
+          <div className={`grid gap-2 ${gameMode === 'doudizhu' ? 'grid-cols-3' : 'grid-cols-4'}`}>
             {players.map(player => {
               const shouldShowPlayerSelection =
                 gameState.status === GameStatus.WAITING ||
@@ -2204,8 +2275,9 @@ function generateSortedCards(currentRank: GameRank): Card[] {
               const playerStats = getPlayerCardStats(player.position);
               const finishIndex = finishOrder.indexOf(player.position);
               const isWinner = finishIndex >= 0;
-              const finishLabel =
-                FINISH_LABELS[finishIndex] ?? '已出完';
+              const finishLabel = gameMode === 'doudizhu'
+                ? '胜出'
+                : (FINISH_LABELS[finishIndex] ?? '已出完');
 
               return (
                 <div
@@ -2250,17 +2322,15 @@ function generateSortedCards(currentRank: GameRank): Card[] {
                       className="h-2 w-2 rounded-full"
                       style={{ backgroundColor: playerColors[player.position] }}
                     />
-                    {gameState.status !== GameStatus.INPUT && (
-                      <PlayerThreatDot
-                        assessment={
-                          analysisResult?.threatLevels[player.position]
-                        }
-                      />
-                    )}
                   </div>
 
-                  <div className={`font-medium text-sm mb-1 ${isWinner ? 'text-yellow-600' : 'text-gray-800'}`}>
+                  <div className={`mb-1 text-base font-black leading-tight ${isWinner ? 'text-yellow-600' : 'text-gray-800'}`}>
                     {getPlayerDisplayName(player.position)}
+                    {gameMode === 'doudizhu' && landlordPosition === player.position && (
+                      <span className="ml-1 rounded bg-amber-500 px-1 py-0.5 text-[10px] font-black text-white">
+                        地主
+                      </span>
+                    )}
                     {handInput.isInputMode &&
                       handInput.startingPlayerSelected &&
                       isSelected && (
@@ -2278,7 +2348,10 @@ function generateSortedCards(currentRank: GameRank): Card[] {
                         </div>
                         <div className="text-center">
                           <div className="text-xl font-bold text-green-600">
-                            {Math.max(0, 27 - playerStats.played)}
+                            {Math.max(
+                              0,
+                              getInitialCardCount(player.position) - playerStats.played
+                            )}
                           </div>
                           <div className="text-gray-500 text-xs">未录</div>
                         </div>
@@ -2303,6 +2376,13 @@ function generateSortedCards(currentRank: GameRank): Card[] {
                       </div>
                     </div>
                   )}
+                  {(gameState.status === GameStatus.PLAYING ||
+                    gameState.status === GameStatus.FINISHED) &&
+                    player.position !== 'bottom' && (
+                    <PlayerInferenceStrip
+                      chips={inferenceViewModel.playerChips[player.position]}
+                    />
+                  )}
                   {isSelected && (
                     <div className="absolute -top-1 -left-1 w-4 h-4 bg-blue-500 rounded-full flex items-center justify-center">
                       <div className="w-2 h-2 bg-white rounded-full" />
@@ -2312,11 +2392,6 @@ function generateSortedCards(currentRank: GameRank): Card[] {
               );
             })}
           </div>
-
-          {gameState.status === GameStatus.PLAYING &&
-            handInput.startingPlayerSelected && (
-            <DecisionBanner analysisResult={analysisResult} />
-          )}
 
           {/* 撤销操作区域 */}
           <div className="flex justify-center space-x-4">
@@ -2343,7 +2418,7 @@ function generateSortedCards(currentRank: GameRank): Card[] {
             {/* 手牌输入模式的撤销按钮 */}
             {handInput.isInputMode &&
              (handInput.inputPurpose === 'hand' ||
-               handInput.revealedTarget === 'bottom') &&
+               (gameMode === 'guandan' && handInput.revealedTarget === 'bottom')) &&
              handInput.playerHands.bottom.length > 0 && (
               <button
                 onClick={() => {
@@ -2378,9 +2453,13 @@ function generateSortedCards(currentRank: GameRank): Card[] {
             >
               <div className="text-sm font-black text-amber-900">
                 本局结束
-                {gameProgress.winningTeam
-                  ? ' · 头游、二游为同队'
-                  : ' · 三游已产生'}
+                {gameMode === 'doudizhu'
+                  ? finishOrder[0] === landlordPosition
+                    ? ' · 地主胜利'
+                    : ' · 农民胜利'
+                  : gameProgress.winningTeam
+                    ? ' · 头游、二游为同队'
+                    : ' · 三游已产生'}
               </div>
               <div className="mt-2 flex flex-wrap justify-center gap-2">
                 {finishOrder.slice(0, 3).map((position, index) => (
@@ -2389,7 +2468,7 @@ function generateSortedCards(currentRank: GameRank): Card[] {
                     data-testid={`finish-rank-${index + 1}`}
                     className="rounded-full border border-amber-200 bg-white px-3 py-1 text-xs font-bold text-amber-900 shadow-sm"
                   >
-                    {FINISH_LABELS[index]} · {getPlayerDisplayName(position)}
+                    {gameMode === 'doudizhu' ? '胜出' : FINISH_LABELS[index]} · {getPlayerDisplayName(position)}
                   </span>
                 ))}
               </div>
@@ -2398,39 +2477,14 @@ function generateSortedCards(currentRank: GameRank): Card[] {
               </div>
             </div>
           ) : gameState.status === GameStatus.PLAYING ? (
-            // 游戏进行中：显示当前玩家和明牌权限提示
-            handInput.startingPlayerSelected ? (
-              <div className="text-center">
-              <div className="flex items-center justify-center space-x-3">
-                <button
-                  onClick={() => switchToNextPlayer(selectedPlayer, true)}
-                  className="px-2 py-1 bg-gray-500 text-white rounded text-xs hover:bg-gray-600 transition-colors"
-                  title="切换到下一个玩家(当前玩家过牌)"
-                >
-                  ← 过牌切换
-                </button>
-                <div className="flex flex-col items-center space-y-1">
-                  <span className="inline-block bg-green-100 text-green-800 px-3 py-1 rounded-full text-xs font-medium">
-                    🎮 当前: {getPlayerDisplayName(selectedPlayer)}
-                  </span>
-                </div>
-                <button
-                  onClick={() => switchToNextPlayer(selectedPlayer, true)}
-                  className="px-2 py-1 bg-gray-500 text-white rounded text-xs hover:bg-gray-600 transition-colors"
-                  title="切换到下一个玩家(当前玩家过牌)"
-                >
-                  过牌切换 →
-                </button>
-              </div>
-              </div>
-            ) : (
+            !handInput.startingPlayerSelected ? (
               <div
                 data-testid="choose-first-player-prompt"
                 className="rounded-lg border border-orange-300 bg-orange-50 px-3 py-2 text-center text-sm font-bold text-orange-800"
               >
-                请点击上方四家牌面，选择实际出牌方
+                请点击上方{gameMode === 'doudizhu' ? '三家' : '四家'}牌面，选择实际出牌方
               </div>
-            )
+            ) : null
           ) : gameState.status === GameStatus.INPUT ? (
             <div
               data-testid="opening-input-controls"
@@ -2456,7 +2510,7 @@ function generateSortedCards(currentRank: GameRank): Card[] {
               <div className="grid grid-cols-2 gap-2">
                 {([
                   ['hand', '我的手牌'],
-                  ['revealed', '明牌']
+                  ['revealed', gameMode === 'doudizhu' ? '地主底牌' : '明牌']
                 ] as Array<[InputPurpose, string]>).map(([purpose, label]) => (
                   <button
                     key={purpose}
@@ -2476,8 +2530,9 @@ function generateSortedCards(currentRank: GameRank): Card[] {
 
               {handInput.inputPurpose === 'hand' ? (
                 <div className="text-center text-xs text-gray-600">
-                  正在录入我的手牌（{handInput.playerHands.bottom.length}/27张）；
-                  其他三家仅通过公开牌和出牌过程推理
+                  正在录入我的手牌（{handInput.playerHands.bottom.length}/
+                  {getInitialCardCount('bottom')}张）；
+                  其他{gameMode === 'doudizhu' ? '两家' : '三家'}仅通过公开牌和出牌过程推理
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -2497,28 +2552,42 @@ function generateSortedCards(currentRank: GameRank): Card[] {
                       }}
                       className="mt-1 block min-h-10 rounded-lg border border-orange-200 bg-white px-3 text-sm font-medium text-gray-800"
                     >
-                      {(Object.keys(PLAYER_DISPLAY_NAMES) as PlayerPosition[]).map(
+                      {activePlayerPositions
+                        .filter(position =>
+                          gameMode === 'guandan' || position === landlordPosition
+                        )
+                        .map(
                         position => (
                           <option key={position} value={position}>
                             {getPlayerDisplayName(position)}
-                            {position === 'bottom' ? '（直接计入手牌）' : ''}
+                            {gameMode === 'doudizhu'
+                              ? '（地主底牌）'
+                              : position === 'bottom'
+                                ? '（直接计入手牌）'
+                                : ''}
                           </option>
                         )
                       )}
                     </select>
                   </label>
                   <div className="text-center text-xs text-orange-800">
-                    {handInput.revealedTarget === 'bottom'
+                    {gameMode === 'doudizhu'
+                      ? `点击下方1张实体牌，为地主${getPlayerDisplayName(
+                          landlordPosition!
+                        )}登记底牌`
+                      : handInput.revealedTarget === 'bottom'
                       ? '我的牌直接计入手牌，不占明牌名额'
                       : `点击下方1张实体牌，为${getPlayerDisplayName(
                           handInput.revealedTarget
                         )}确认明牌`}
                     （公开牌
                     {(handInput.revealedEntries as RevealedCardRecord[]).length}
-                    /4张）
+                    /{gameMode === 'doudizhu' ? 3 : 4}张）
                   </div>
                   <div className="text-center text-[11px] text-gray-600">
-                    每家通常1张；允许其中一家设置2张，其余各家仍最多1张
+                    {gameMode === 'doudizhu'
+                      ? '三张底牌全部归属地主，可逐张录入'
+                      : '每家通常1张；允许其中一家设置2张，其余各家仍最多1张'}
                   </div>
                 </div>
               )}
@@ -2552,28 +2621,7 @@ function generateSortedCards(currentRank: GameRank): Card[] {
                 </div>
               )}
             </div>
-          ) : (
-            // 正常模式：显示当前玩家
-            <div className="flex items-center justify-center space-x-3">
-              <button
-                onClick={() => setGameState(prev => ({ ...prev, currentPlayerPosition: getNextPlayer(selectedPlayer), updatedAt: Date.now() }))}
-                className="px-2 py-1 bg-gray-500 text-white rounded text-xs hover:bg-gray-600 transition-colors"
-                title="切换到下一个玩家"
-              >
-                ← 切换
-              </button>
-              <span className="inline-block bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-xs font-medium">
-                当前: {getPlayerDisplayName(selectedPlayer)}
-              </span>
-              <button
-                onClick={() => setGameState(prev => ({ ...prev, currentPlayerPosition: getNextPlayer(selectedPlayer), updatedAt: Date.now() }))}
-                className="px-2 py-1 bg-gray-500 text-white rounded text-xs hover:bg-gray-600 transition-colors"
-                title="切换到下一个玩家"
-              >
-                切换 →
-              </button>
-            </div>
-          )}
+          ) : null}
 
           {/* 牌面选择区域 */}
           <div className={`bg-white rounded-lg shadow-sm ${isTouchDevice ? 'p-2' : 'p-4'}`}>
@@ -2583,10 +2631,12 @@ function generateSortedCards(currentRank: GameRank): Card[] {
                 {handInput.isInputMode
                   ? handInput.inputPurpose === 'hand'
                     ? '可连续快速点击，也可横向划过多张牌录入手牌'
+                    : gameMode === 'doudizhu'
+                      ? '每次点1张牌，确认后登记为地主底牌'
                     : handInput.revealedTarget === 'bottom'
                       ? '选择“我”时可横向划选，卡牌直接计入手牌'
                       : '选择一家后每次点1张牌，确认后直接登记为明牌'
-                  : '可横向划过多张牌选牌；也可输入“上出7890J”直接记录'}
+                  : '先点上方或下方玩家，再横向划过多张牌，最后确认出牌'}
               </div>
             )}
 
@@ -2595,7 +2645,7 @@ function generateSortedCards(currentRank: GameRank): Card[] {
               <div className="mb-4 flex items-center justify-between bg-blue-50 border border-blue-200 rounded-lg p-3">
                 <div className="flex items-center space-x-2">
                   <span className="text-blue-700 font-medium">
-                    已选择 {selectedCards.size} 张牌
+                    {getPlayerDisplayName(selectedPlayer)}已选择{selectedCards.size}张牌
                   </span>
                 </div>
                 <div className="space-x-2">
@@ -2611,8 +2661,8 @@ function generateSortedCards(currentRank: GameRank): Card[] {
                   >
                     {handInput.isInputMode
                       ? handInput.inputPurpose === 'revealed' &&
-                        handInput.revealedTarget !== 'bottom'
-                        ? '确认明牌'
+                        (handInput.revealedTarget !== 'bottom' || gameMode === 'doudizhu')
+                        ? (gameMode === 'doudizhu' ? '确认底牌' : '确认明牌')
                         : '确认手牌'
                       : '确认出牌'}
                   </button>
@@ -2650,11 +2700,14 @@ function generateSortedCards(currentRank: GameRank): Card[] {
 
                 const groupOrder: string[] = [];
                 for (let rank = 2; rank <= 14; rank++) {
-                  if (rank !== currentRank && cardGroups[rank.toString()]) {
+                  if (
+                    (gameMode === 'doudizhu' || rank !== currentRank) &&
+                    cardGroups[rank.toString()]
+                  ) {
                     groupOrder.push(rank.toString());
                   }
                 }
-                if (cardGroups[currentRank.toString()]) {
+                if (gameMode === 'guandan' && cardGroups[currentRank.toString()]) {
                   groupOrder.push(currentRank.toString());
                 }
                 if (cardGroups.joker) {
@@ -2663,14 +2716,6 @@ function generateSortedCards(currentRank: GameRank): Card[] {
 
                 return groupOrder.map(groupKey => {
                   const groupCards = cardGroups[groupKey];
-                  const numericRank = Number(groupKey);
-                  const inferenceRank =
-                    Number.isInteger(numericRank) &&
-                    numericRank >= 2 &&
-                    numericRank <= 14
-                      ? numericRank as GameRank
-                      : null;
-
                   return (
                     <div
                       key={groupKey}
@@ -2689,6 +2734,10 @@ function generateSortedCards(currentRank: GameRank): Card[] {
                           const playerColor = playRecord
                             ? playerColors[playRecord.playerPosition]
                             : undefined;
+                          const knownOwnership =
+                            inferenceViewModel.knownOwnership[card.id];
+                          const inferredOwnership =
+                            inferenceViewModel.inferredOwnership[card.id];
 
                           let assignedPlayer: PlayerPosition | null = null;
                           if (
@@ -2787,9 +2836,6 @@ function generateSortedCards(currentRank: GameRank): Card[] {
                                       pointerEvents: 'none'
                                     }}
                                   />
-                                  <div className="absolute left-0 top-0 rounded-br-lg rounded-tl-lg bg-black bg-opacity-70 px-1 py-0.5 text-xs font-bold text-white">
-                                    {getPlayerDisplayName(playRecord.playerPosition)}
-                                  </div>
                                 </>
                               )}
 
@@ -2807,31 +2853,30 @@ function generateSortedCards(currentRank: GameRank): Card[] {
                                     }}
                                     title={`${getPlayerDisplayName(assignedPlayer)}手牌`}
                                   />
-                                  <div
-                                    className="absolute bottom-0 left-0 right-0 truncate rounded-b-md bg-black bg-opacity-75 px-0.5 py-0.5 text-center text-[9px] font-bold leading-none text-white"
-                                    style={{
-                                      pointerEvents: 'none',
-                                      backgroundColor:
-                                        assignedPlayer === 'bottom'
-                                          ? '#b45309'
-                                          : playerColors[assignedPlayer]
-                                    }}
-                                    title={`${getPlayerDisplayName(assignedPlayer)}的牌`}
-                                  >
-                                    {getPlayerDisplayName(assignedPlayer)}
-                                  </div>
                                 </>
+                              )}
+                              <KnownOwnerOverlay
+                                ownership={knownOwnership}
+                                inference={inferredOwnership}
+                              />
+                              {!knownOwnership && assignedPlayer && (
+                                <div
+                                  className="pointer-events-none absolute bottom-0 left-0 right-0 z-20 truncate rounded-b-md px-0.5 py-0.5 text-center text-[9px] font-bold leading-none text-white"
+                                  style={{
+                                    backgroundColor:
+                                      assignedPlayer === 'bottom'
+                                        ? '#b45309'
+                                        : playerColors[assignedPlayer]
+                                  }}
+                                  title={`${getPlayerDisplayName(assignedPlayer)}的牌`}
+                                >
+                                  {getPlayerDisplayName(assignedPlayer)}
+                                </div>
                               )}
                             </div>
                           );
                         })}
                       </div>
-                      {inferenceRank !== null && (
-                        <RankInferenceBadge
-                          rank={inferenceRank}
-                          analysisResult={analysisResult}
-                        />
-                      )}
                     </div>
                   );
                 });
@@ -2856,7 +2901,7 @@ function generateSortedCards(currentRank: GameRank): Card[] {
                     上下两处均可选择
                   </span>
                 </div>
-                <div className="grid grid-cols-4 gap-1.5">
+                <div className={`grid gap-1.5 ${gameMode === 'doudizhu' ? 'grid-cols-3' : 'grid-cols-4'}`}>
                   {players.map(player => {
                     const isSelected =
                       handInput.startingPlayerSelected &&
@@ -2872,7 +2917,7 @@ function generateSortedCards(currentRank: GameRank): Card[] {
                         data-testid={`bottom-player-${player.position}`}
                         disabled={playerHasFinished}
                         onClick={() => selectActivePlayer(player.position)}
-                        className={`min-h-11 rounded-lg border px-1 py-2 text-xs font-black transition-colors ${
+                        className={`min-h-11 rounded-lg border px-1 py-2 text-sm font-black transition-colors ${
                           isSelected
                             ? 'border-blue-600 bg-blue-600 text-white shadow-sm'
                             : 'border-slate-200 bg-slate-50 text-slate-700 active:bg-slate-200'
@@ -2895,7 +2940,7 @@ function generateSortedCards(currentRank: GameRank): Card[] {
         </div>
       </main>
 
-      {/* 作用说明：原牌面下方的常驻说明集中到这里。 */}
+      {/* 使用说明：原牌面下方的常驻说明集中到这里。 */}
       {showInstructions && (
         <div
           className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/55 p-3"
@@ -2914,59 +2959,130 @@ function generateSortedCards(currentRank: GameRank): Card[] {
                   id="instructions-title"
                   className="text-lg font-black text-slate-900"
                 >
-                  作用说明
+                  {gameMode === 'doudizhu' ? '斗地主使用说明' : '掼蛋使用说明'}
                 </h2>
                 <p className="text-xs text-slate-500">
-                  快速记牌、持续推理、保存与复盘重要牌局
+                  {gameMode === 'doudizhu'
+                    ? '三人一副牌：先选地主，再录入手牌和三张底牌'
+                    : '四人两副牌：录入手牌后持续记牌、推理并复盘'}
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setShowInstructions(false)}
                 className="min-h-11 min-w-11 rounded-full bg-slate-100 text-xl font-bold text-slate-600"
-                aria-label="关闭作用说明"
+                aria-label="关闭使用说明"
               >
                 ×
               </button>
             </div>
 
             <div className="space-y-4 overflow-y-auto px-4 py-4 text-sm text-slate-700">
-              <section>
-                <h3 className="mb-2 font-black text-slate-900">按这5步使用</h3>
-                <ol className="space-y-2">
-                  <li><strong>第一步：</strong>选择“打几”，再点“开始游戏”。</li>
-                  <li>
-                    <strong>第二步：</strong>录入自己的手牌；进贡或还贡到自己手中的牌直接算入手牌。需要时切换到“明牌”，先选所属玩家，再点公开牌。
-                  </li>
-                  <li>
-                    <strong>第三步：</strong>选择首家出牌并点“确认开始”。不默认由“我”先出；顶部四家牌面和牌面底部四个按钮都可选择。
-                  </li>
-                  <li>
-                    <strong>第四步：</strong>每次先选出牌方，再点击或横向滑过实体牌，最后确认出牌；过牌用“过牌切换”。五张连续点数按同花顺快速录入，红心级牌由系统自动按配牌处理。
-                  </li>
-                  <li>
-                    <strong>第五步：</strong>发现录错可连续撤销；重要牌局点“重要”实时保存，之后从“历史”打开回放。
-                  </li>
-                </ol>
-              </section>
-
-              <section className="rounded-xl bg-sky-50 p-3">
-                <h3 className="mb-2 font-black text-sky-950">牌面标记怎么看</h3>
-                <div className="space-y-1 text-xs text-sky-900">
-                  <p>绿色“✓上/下/对”表示归属已基本确认。</p>
-                  <p>橙色“下72%”表示较高概率归属；红色“⚠”表示炸弹风险。</p>
-                  <p>牌面不再重复标注剩余张数，直接看每行8张实体牌即可。</p>
-                  <p>四家面板右上角彩点表示综合威胁，决策横幅给出当前建议。</p>
+              <section className="rounded-xl border border-amber-300 bg-amber-50 p-3 shadow-sm">
+                <h3 className="mb-2 font-black text-amber-950">程序更新与清缓存</h3>
+                <div className="space-y-2 text-xs leading-5 text-amber-950">
+                  <p>如果新语音规则、按钮或牌面没有出现，说明手机仍在使用旧 Service Worker 或旧静态资源。</p>
+                  <a
+                    href="/clear-cache.html"
+                    className="inline-flex min-h-11 items-center rounded-lg bg-amber-600 px-3 py-2 text-sm font-bold text-white transition-colors hover:bg-amber-700"
+                  >
+                    更新程序（保留牌局）
+                  </a>
+                  <p>该操作只注销旧 Service Worker 并清除程序缓存，不删除当前牌局和历史记录。</p>
                 </div>
               </section>
 
-              <section>
-                <h3 className="mb-2 font-black text-slate-900">录入与规则</h3>
-                <div className="space-y-1 text-xs">
-                  <p>普通点数每行显示8张，大小王共4张；已出牌会标出玩家。</p>
-                  <p>程序校验单张、对子、三张、三带二、钢板、连对、顺子、炸弹和同花顺。</p>
-                  <p>全桌最多设置4张明牌；允许一家2张，其余各家最多1张。自己的已录手牌不占明牌名额。</p>
-                  <p>切换其他应用后，当前牌局会自动保存到本机，返回可继续。</p>
+              {gameMode === 'doudizhu' ? (
+                <>
+                  <section>
+                    <h3 className="mb-2 font-black text-slate-900">斗地主：按这5步使用</h3>
+                    <ol className="space-y-2">
+                      <li><strong>第一步：</strong>切换到“斗地主”，选择地主（我、下家或上家）。</li>
+                      <li><strong>第二步：</strong>点击“开始游戏”，先用“录我的手牌”录入地主或农民的17张手牌。</li>
+                      <li><strong>第三步：</strong>点击“录地主底牌”，逐张选择并确认3张底牌；底牌自动归属地主。地主共20张，农民各17张。</li>
+                      <li><strong>第四步：</strong>每轮先选择实际出牌方，再点或横向滑过牌面，确认出牌；未出牌的玩家会自动记为过牌。</li>
+                      <li><strong>第五步：</strong>录错可撤销；重要牌局点“重要”保存，之后从“历史”回放。</li>
+                    </ol>
+                  </section>
+                  <section className="rounded-xl border border-violet-200 bg-violet-50 p-3">
+                    <h3 className="mb-2 font-black text-violet-950">斗地主语音规则</h3>
+                    <div className="space-y-2 text-xs leading-5 text-violet-950">
+                      <p><strong>出牌方：</strong>只说“我/自己、下家、上家”，斗地主没有对家。</p>
+                      <p><strong>标准格式：</strong>“下家出四个六”“上家一对九”“我三个八带一对五”。</p>
+                      <p><strong>顺子：</strong>说“上家七八九十勾”；不需要说花色，2和王不能组成普通顺子。</p>
+                      <p><strong>炸弹和王炸：</strong>说“我四个A”或“上家王炸”。过牌说“过”“不要”或“要不起”。</p>
+                      <p><strong>避免歧义：</strong>对子必须说“一对七”或“两个七”，不要只说“对7”。</p>
+                    </div>
+                  </section>
+                  <section className="rounded-xl bg-sky-50 p-3">
+                    <h3 className="mb-2 font-black text-sky-950">斗地主牌面与规则</h3>
+                    <div className="space-y-1 text-xs text-sky-900">
+                      <p>每个普通点数显示4张牌，大小王共2张；已出牌会标出玩家。</p>
+                      <p>绿色“✓上/下”表示归属基本确认，橙色标签表示较高概率，红色“⚠”表示炸弹风险。</p>
+                      <p>地主先出；地主先出完为地主胜利，任一农民先出完为农民胜利。</p>
+                      <p>切换其他应用后，当前斗地主牌局会自动保存到本机，返回可继续。</p>
+                    </div>
+                  </section>
+                </>
+              ) : (
+                <>
+                  <section>
+                    <h3 className="mb-2 font-black text-slate-900">掼蛋：按这5步使用</h3>
+                    <ol className="space-y-2">
+                      <li><strong>第一步：</strong>选择“打几”，再点“开始游戏”。</li>
+                      <li><strong>第二步：</strong>录入自己的27张手牌；进贡或还贡到自己手中的牌直接算入手牌。需要时切换到“明牌”，先选所属玩家，再点公开牌。</li>
+                      <li><strong>第三步：</strong>选择首家出牌并点“确认开始”。不默认由“我”先出；顶部四家牌面和牌面底部四个按钮都可选择。</li>
+                      <li><strong>第四步：</strong>每次先点实际出牌方，再点击或横向滑过实体牌，最后确认出牌；跳过的玩家会自动记为过牌。</li>
+                      <li><strong>第五步：</strong>发现录错可连续撤销；重要牌局点“重要”实时保存，之后从“历史”打开回放。</li>
+                    </ol>
+                  </section>
+                  <section className="rounded-xl border border-violet-200 bg-violet-50 p-3">
+                    <h3 className="mb-2 font-black text-violet-950">掼蛋语音规则与实战建议</h3>
+                    <div className="space-y-2 text-xs leading-5 text-violet-950">
+                      <p><strong>最稳的玩家称呼：</strong>推荐使用“我、下、队友、上”。手机语音有时会把“下家”拆成两段或识别成“夏家”，所以说“下”通常比“下家”稳定；“队友”也比“对家”更不容易和“对子”混淆。</p>
+                      <p><strong>兼容称呼：</strong>“下家、上家、对家”和单字“对”仍然可以使用。单字“对7”表示对家出一张7；“我对7”才表示我出一对7。</p>
+                      <p><strong>数量说法：</strong>“两个7”和“两张7”含义相同；手机识别不稳定时优先说“两个”。例如：“下两个7两个8两个9”“队友四个10”。</p>
+                      <p><strong>标准格式：</strong>“下四个六”“上一对九”“队友三个八带一对五”。J可以说“勾”，Q可以说“圈”，A可以说“A、尖、EI、S或艾斯”。</p>
+                      <p><strong>顺子和同花顺：</strong>可说“上七八九十勾”；不需要说普通花色，五张连续点数按快速规则记录。</p>
+                      <p><strong>红心配推荐说法：</strong>直接说“红心配”或“配牌”，程序会按当前“打几”自动选择真正的红心级牌。例如打8时，“下一张6红心配”等同于“下一张6红心8”，可配成对6。</p>
+                      <p><strong>红心配组合示例：</strong>“下三个5红心配”组成四个5炸弹；“下2356红心配”补成23456；“下两张6红心配带对4”组成66644三带二。</p>
+                      <p><strong>红心配失败时：</strong>如果提示“可用的红心级牌不足”，请检查该红心级牌是否已经出过、是否录入了我方手牌、是否登记为其他玩家明牌，或者当前“打几”是否和红心牌点一致。程序必须选择真实红心级牌，不会用普通级牌代替。</p>
+                      <p><strong>王炸和过牌：</strong>说“上王炸”；过牌说“过”“不要”“要不起”或“过牌”。</p>
+                    </div>
+                  </section>
+                  <section className="rounded-xl bg-sky-50 p-3">
+                    <h3 className="mb-2 font-black text-sky-950">掼蛋牌面与规则</h3>
+                    <div className="space-y-1 text-xs text-sky-900">
+                      <p>每个普通点数显示8张，大小王共4张；已出牌会标出玩家。</p>
+                      <p>绿色“✓上/下/对”表示归属基本确认，橙色标签表示较高概率，红色“⚠”表示炸弹风险。</p>
+                      <p>全桌最多设置4张明牌；允许一家2张，其余各家最多1张。程序支持掼蛋牌型校验和回放。</p>
+                      <p>切换其他应用后，当前掼蛋牌局会自动保存到本机，返回可继续。</p>
+                    </div>
+                  </section>
+                </>
+              )}
+
+              <section className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                <h3 className="mb-2 font-black text-amber-950">版本更新、缓存与 Service Worker</h3>
+                <div className="space-y-2 text-xs leading-5 text-amber-950">
+                  <p>正常部署新版本后，应用会自动更新。如果刷新后仍显示旧程序，优先使用下面的站内工具，不需要寻找地址栏锁头图标。</p>
+                  <ol className="list-decimal space-y-1 pl-5">
+                    <li>点击“打开清缓存页面”。</li>
+                    <li>点击“更新程序（保留牌局）”，工具会注销旧 Service Worker、删除程序缓存并自动返回最新版。</li>
+                    <li>如果仍是旧版，请关闭该网站全部标签页和桌面图标窗口，再重新打开。</li>
+                  </ol>
+                  <a
+                    href="/clear-cache.html"
+                    className="inline-flex min-h-11 items-center rounded-lg bg-amber-600 px-3 py-2 text-sm font-bold text-white transition-colors hover:bg-amber-700"
+                  >
+                    打开清缓存页面
+                  </a>
+                  <div className="rounded-lg bg-white/70 p-2">
+                    <p><strong>iPhone/iPad 的 Chrome：</strong>地址栏通常没有锁头或网站信息按钮，这是正常的。点击右上角“…” → “删除浏览数据” → 时间范围选“所有时间” → 只勾选“Cookie、网站数据”和“缓存的图片和文件” → 删除。Chrome iOS 会同时清理其他网站数据，可能需要重新登录。</p>
+                    <p className="mt-1"><strong>iPhone/iPad 的 Safari：</strong>打开系统“设置” → “App” → “Safari 浏览器” → “高级” → “网站数据”，搜索 <code>pixelforgeai.com.cn</code>，向左滑动删除该网站即可。</p>
+                    <p className="mt-1"><strong>已经添加到主屏幕：</strong>先删除旧桌面图标，清理完成并确认网页已更新后，再重新添加到主屏幕。</p>
+                  </div>
+                  <p className="font-bold text-red-700">“更新程序（保留牌局）”不会删除历史牌局；只有主动点击“清除本地牌局数据”才会删除本机记录，操作前请先导出重要数据。</p>
                 </div>
               </section>
             </div>
@@ -3015,7 +3131,9 @@ function generateSortedCards(currentRank: GameRank): Card[] {
                           游戏ID: {record.sourceGameId || record.id}
                         </p>
                         <p className="text-sm text-gray-600">
-                          打{RANK_DISPLAY_NAMES[record.currentRank]} ·
+                          {record.gameMode === 'doudizhu'
+                            ? `斗地主 · 地主${getPlayerDisplayName(record.landlordPosition ?? 'bottom')}`
+                            : `掼蛋 · 打${RANK_DISPLAY_NAMES[record.currentRank]}`} ·
                           {record.isCompleted ? ' 已完成' : ' 进行中'} ·
                           {' '}{record.playHistory.length}次操作
                         </p>
@@ -3160,78 +3278,11 @@ function generateSortedCards(currentRank: GameRank): Card[] {
         />
       )}
 
-      {/* 快捷文字录入独立放在页面底部，不占用原四家牌面区域。 */}
-      <div className="mx-auto w-full max-w-6xl px-4 pb-2">
-        <form
-          className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
-          onSubmit={event => {
-            event.preventDefault();
-            handleQuickTextSubmit();
-          }}
-        >
-          <label
-            htmlFor="quick-card-text-input"
-            className="mb-2 block text-sm font-bold text-slate-700"
-          >
-            快捷文字录入（不区分花色）
-          </label>
-          <div className="flex gap-2">
-            <input
-              id="quick-card-text-input"
-              ref={quickCardInputRef}
-              data-testid="quick-card-text-input"
-              value={quickCardText}
-              onChange={event => {
-                setQuickCardText(event.target.value);
-                if (quickCardError) setQuickCardError(null);
-                if (quickCardNotice) setQuickCardNotice(null);
-              }}
-              aria-invalid={Boolean(quickCardError)}
-              aria-describedby="quick-card-text-help"
-              autoComplete="off"
-              autoCapitalize="characters"
-              autoCorrect="off"
-              enterKeyHint="done"
-              inputMode="text"
-              spellCheck={false}
-              placeholder="如：上出7890J、下45678、对过"
-              className={`min-h-11 min-w-0 flex-1 rounded-lg border bg-white px-3 py-2 text-base font-semibold uppercase outline-none ${
-                quickCardError
-                  ? 'border-red-400 focus:border-red-500'
-                  : 'border-slate-300 focus:border-blue-500'
-              }`}
-            />
-            <button
-              type="submit"
-              data-testid="quick-card-text-submit"
-              disabled={!quickCardText.trim()}
-              className="min-h-11 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              记入
-            </button>
-          </div>
-          <p
-            id="quick-card-text-help"
-            aria-live="polite"
-            className={`mt-1 text-xs ${
-              quickCardError
-                ? 'text-red-600'
-                : quickCardNotice
-                  ? 'font-medium text-emerald-700'
-                  : 'text-slate-500'
-            }`}
-          >
-            {quickCardError ||
-              quickCardNotice ||
-              '实体牌面保持原布局；也可用短句快速录入或记录过牌'}
-          </p>
-        </form>
-      </div>
-
       {/* 语音控制同样独立放在页面底部，不改变原牌面布局。 */}
       <VoiceControl
         onVoiceCommand={handleVoiceCommand}
         disabled={gameState.status !== GameStatus.PLAYING}
+        currentRank={currentRank}
       />
 
     </div>

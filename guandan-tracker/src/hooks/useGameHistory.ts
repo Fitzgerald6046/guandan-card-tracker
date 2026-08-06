@@ -6,6 +6,7 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import type { 
   Card, 
+  GameMode,
   GameRank, 
   Player,
   PlayerPosition, 
@@ -34,6 +35,11 @@ interface GameRecord {
   duration: number;
   /** 当前级数 */
   currentRank: GameRank;
+
+  /** 牌局模式；旧记录缺少时按掼蛋回放 */
+  gameMode?: GameMode;
+  /** 斗地主地主位置 */
+  landlordPosition?: PlayerPosition;
   
   /** 玩家信息快照 */
   players: Array<{
@@ -150,6 +156,10 @@ interface GameStateSnapshot {
   currentRound?: { startTime?: number };
   createdAt?: number;
   currentPlayerPosition?: PlayerPosition;
+  config?: {
+    gameMode?: GameMode;
+    landlordPosition?: PlayerPosition;
+  };
 }
 
 interface GameHistoryExport {
@@ -434,6 +444,8 @@ export function useGameHistory(): UseGameHistoryReturn {
       timestamp,
       duration,
       currentRank,
+      gameMode: gameStats?.config?.gameMode ?? 'guandan',
+      landlordPosition: gameStats?.config?.landlordPosition,
       players: players.map(p => ({ ...p })),
       finalCardOwnership: { ...cardOwnership },
       cardsSnapshot: cards.map(c => ({ ...c })),

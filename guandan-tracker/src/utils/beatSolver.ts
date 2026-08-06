@@ -200,9 +200,10 @@ export function findLowestCostBeat(
     });
   }
 
-  // 钢板：三个连续点数各取三张。
+  // 钢板：按实际张数计算连续三同张组数，标准钢板为两个连续三张。
   if (leadType.type === 'steel_board') {
-    getRankSequences(3).forEach(sequence => {
+    const tripleCount = (leadType.cardCount ?? leadCards.length) / 3;
+    getRankSequences(tripleCount).forEach(sequence => {
       addCandidate(buildPattern(
         playableCards,
         sequence.map(rank => [rank, 3])

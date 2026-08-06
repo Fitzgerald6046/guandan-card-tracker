@@ -38,6 +38,9 @@ export type Rank = typeof Rank[keyof typeof Rank];
 /** 有效级数范围（2-14，即2到A） */
 export type GameRank = 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
 
+/** 记牌器支持的游戏模式。旧存档缺少该字段时按掼蛋处理。 */
+export type GameMode = 'guandan' | 'doudizhu';
+
 /** 玩家位置 */
 export const PlayerPosition = {
   BOTTOM: 'bottom',     // 下方（自己）
@@ -182,6 +185,12 @@ export interface RankConfig {
 
 /** 游戏配置 */
 export interface GameConfig {
+  /** 游戏模式 */
+  gameMode?: GameMode;
+
+  /** 斗地主地主位置；掼蛋模式不使用 */
+  landlordPosition?: PlayerPosition;
+
   /** 级数配置 */
   rank: RankConfig;
   
@@ -277,6 +286,9 @@ export interface PlayRecord {
   
   /** 回合序号 */
   roundIndex?: number;
+
+  /** 同一次语音操作产生的自动过牌与实际出牌共享此标识，便于整体撤销 */
+  operationId?: string;
   
   /** 出牌描述 */
   description?: string;
@@ -565,7 +577,10 @@ export interface PlayerPassInference {
 /** 某一玩家对某点数的后验持牌估计。 */
 export interface PlayerRankProbability {
   knownCount: number;
+  /** 完整后验张数分布，下标即该玩家当前持有的该点数张数。 */
+  probabilityByCount: number[];
   expectedCount: number;
+  mostLikelyCount: number;
   probabilityAtLeastOne: number;
   pairProbability: number;
   tripleProbability: number;
@@ -670,6 +685,8 @@ export interface PlayerStructureInference {
 export interface RankOwnershipClue {
   rank: GameRank;
   suspectedOwner: PlayerPosition;
+  /** 扣除已出牌及其他玩家已知未出牌后，投到该玩家的剩余张数。 */
+  inferredCount: number;
   probability: number;
   confidence: 'clue' | 'likely' | 'strong' | 'known';
   evidenceCount: number;
@@ -736,6 +753,58 @@ export interface EndgamePlayerInference {
 export interface EndgameInference {
   threshold: number;
   players: EndgamePlayerInference[];
+}
+
+/** 牌面上允许展示的可核验归属事实。 */
+export interface KnownCardOwnership {
+  cardId: string;
+  owner: PlayerPosition;
+  source:
+    | 'self_hand'
+    | 'revealed'
+    | 'tribute'
+    | 'played'
+    | 'constraint_locked'
+    | 'user_confirmed';
+}
+
+/** 玩家名下的极短软推断；不会被当成确定牌权。 */
+export interface PlayerInferenceChip {
+  id: string;
+  playerPosition: PlayerPosition;
+  category:
+    | 'rank_count'
+    | 'pair_structure'
+    | 'triple_structure'
+    | 'straight_structure'
+    | 'bomb_risk'
+    | 'single_structure'
+    | 'response_limit';
+  label: string;
+  confidence: number;
+  priority: number;
+  sourceActionIds: string[];
+  /** 点数类推断用于同步投影到实体牌面；不代表具体花色归属。 */
+  inferredRank?: GameRank;
+  inferredCount?: number;
+  expiresWhenRoundChanges?: boolean;
+}
+
+/** 实体牌面上的软归属推断。cardId 只是数量占位，不代表具体花色。 */
+export interface InferredCardOwnership {
+  cardId: string;
+  suspectedOwner: PlayerPosition;
+  confidence: number;
+  rank: GameRank;
+}
+
+/** 实战主界面唯一读取的压缩推理结果。 */
+export interface TableInferenceViewModel {
+  /** 防止滞回状态跨牌局或级牌规则复用。 */
+  contextKey: string;
+  knownOwnership: Record<string, KnownCardOwnership>;
+  inferredOwnership: Record<string, InferredCardOwnership>;
+  playerChips: Record<PlayerPosition, PlayerInferenceChip[]>;
 }
 
 export interface InferenceChange {
@@ -809,6 +878,8 @@ export interface AIAnalysisResult {
   passInferences: PlayerPassInference[];
   /** 基于已知牌和已出牌动态更新的持牌概率 */
   cardDistribution: CardDistributionInference;
+  /** 不含行为软证据的同状态先验，用于判断后验是否真的产生信息增益。 */
+  baselineCardDistribution: CardDistributionInference;
   /** 进入后验计算的统一证据账本 */
   evidenceLedger: InferenceEvidenceLedger;
   /** 逐玩家、逐动作累积的人工牌路推理 */

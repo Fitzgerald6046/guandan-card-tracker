@@ -180,6 +180,62 @@ export interface PickCardsByRanksResult {
   success: boolean;
   selectedIds: Set<string>;
   missingRank?: Rank;
+  missingExplicitWildCard?: boolean;
+}
+
+/**
+ * 语音口令中的“红心8/红心J”表示明确要求使用实体配牌。
+ * 先锁定这些红心级牌，再从剩余点数中选择普通牌，避免普通级牌抢占配牌位置。
+ */
+export function pickCardsByVoiceRanks(
+  cards: Card[],
+  ranks: Rank[],
+  explicitWildCardRanks: Rank[],
+  isSelectable: (cardId: string) => boolean,
+  blockedIds: ReadonlySet<string> = new Set()
+): PickCardsByRanksResult {
+  const selectedIds = new Set<string>();
+  const remainingRanks = [...ranks];
+
+  for (const wildRank of explicitWildCardRanks) {
+    const requestedRankIndex = remainingRanks.indexOf(wildRank);
+    if (requestedRankIndex < 0) {
+      return {
+        success: false,
+        selectedIds: new Set(),
+        missingRank: wildRank,
+        missingExplicitWildCard: true
+      };
+    }
+
+    const wildCard = cards.find(card =>
+      card.rank === wildRank &&
+      card.isWildCard &&
+      !card.isPlayed &&
+      !selectedIds.has(card.id) &&
+      !blockedIds.has(card.id) &&
+      isSelectable(card.id)
+    );
+    if (!wildCard) {
+      return {
+        success: false,
+        selectedIds: new Set(),
+        missingRank: wildRank,
+        missingExplicitWildCard: true
+      };
+    }
+
+    selectedIds.add(wildCard.id);
+    remainingRanks.splice(requestedRankIndex, 1);
+  }
+
+  return pickCardsByRanks(
+    cards,
+    selectedIds,
+    remainingRanks,
+    isSelectable,
+    blockedIds
+  );
 }
 
 /** 原子批量选牌：任一点数不足时保持原选择不变。 */

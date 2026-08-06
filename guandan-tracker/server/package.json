@@ -1,0 +1,11 @@
+{
+  "name": "guandan-stt-proxy",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node groq-stt-server.mjs"
+  },
+  "dependencies": {
+    "undici": "^7.13.0"
+  }
+}

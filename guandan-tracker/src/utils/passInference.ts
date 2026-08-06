@@ -173,13 +173,18 @@ const chooseStrongerObservation = (
 export function analyzePassInferences(
   history: PlayRecord[],
   currentRank: GameRank,
-  remainingCounts: Partial<Record<PlayerPosition, number>> = {}
+  remainingCounts: Partial<Record<PlayerPosition, number>> = {},
+  playerTeams?: Partial<Record<PlayerPosition, 1 | 2>>
 ): PlayerPassInference[] {
+  const playersAreTeammates = (left: PlayerPosition, right: PlayerPosition) =>
+    playerTeams?.[left] !== undefined && playerTeams?.[right] !== undefined
+      ? playerTeams[left] === playerTeams[right]
+      : isSameTeam(left, right);
   const observations = collectPassObservations(history, currentRank);
   const grouped = new Map<string, PassObservation[]>();
 
   observations.forEach(observation => {
-    const relation = isSameTeam(
+    const relation = playersAreTeammates(
       observation.passRecord.playerPosition,
       observation.leadRecord.playerPosition
     ) ? 'teammate' : 'opponent';
@@ -192,7 +197,7 @@ export function analyzePassInferences(
   const results: PlayerPassInference[] = [];
   grouped.forEach(group => {
     const latest = group[group.length - 1];
-    const cooperative = isSameTeam(
+    const cooperative = playersAreTeammates(
       latest.passRecord.playerPosition,
       latest.leadRecord.playerPosition
     );

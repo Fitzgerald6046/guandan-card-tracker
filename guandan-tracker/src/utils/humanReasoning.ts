@@ -11,6 +11,7 @@ import type {
   ReasoningStepReminder,
   StraightRouteInference
 } from '../types/game';
+import { getGameMode, getPlayerInitialCardCount } from './gameMode';
 import { RANK_DISPLAY_NAMES, Rank } from '../types/game';
 import { analyzeChoiceEvidence } from './choiceInference';
 import { PLAYER_DISPLAY_NAMES } from './gameProgress';
@@ -63,6 +64,23 @@ const buildRemainingRankCounts = (
   counts[rank] = Math.max(0, totalCopies - playedCopies);
   return counts;
 }, {} as Record<GameRank, number>);
+
+/** 对子应对灵活度只接受 pair_response，避免三带二附件选择污染。 */
+export const calculatePairResponseFlexibility = (
+  choiceEvidence: ChoiceEvidence[],
+  position: PlayerPosition
+): number => {
+  const pairResponseEvidence = choiceEvidence.filter(observation =>
+    observation.playerPosition === position &&
+    observation.scenario === 'pair_response'
+  );
+  const pairFlexibilityLogOdds = pairResponseEvidence.reduce(
+    (logOdds, observation) =>
+      logOdds - Math.log(observation.likelihoodRatio),
+    0
+  );
+  return clamp(1 / (1 + Math.exp(-pairFlexibilityLogOdds)));
+};
 
 const buildPlayerStructures = (
   history: PlayRecord[],
@@ -177,12 +195,10 @@ const buildPlayerStructures = (
     const playerChoiceEvidence = choiceEvidence.filter(
       observation => observation.playerPosition === position
     );
-    const pairFlexibilityLogOdds = playerChoiceEvidence.reduce(
-      (logOdds, observation) =>
-        logOdds - Math.log(observation.likelihoodRatio),
-      0
+    const pairFlexibility = calculatePairResponseFlexibility(
+      choiceEvidence,
+      position
     );
-    const pairFlexibility = 1 / (1 + Math.exp(-pairFlexibilityLogOdds));
 
     if (tripleStraightWeight > 0) {
       profile.evidence.push(
@@ -220,31 +236,72 @@ const buildOwnershipClues = (
   cardDistribution: CardDistributionInference,
   playedRankCounts: Record<PlayerPosition, Record<GameRank, number>>
 ): RankOwnershipClue[] => {
+  const activePositions = gameState.players.map(player => player.position);
   const candidatesByRank = new Map(
     cardDistribution.bombCandidates.map(candidate => [candidate.rank, candidate])
   );
+  const playedCardIds = new Set(
+    gameState.playHistory.flatMap(record => record.cards.map(card => card.id))
+  );
+  const knownRankCounts = PLAYER_POSITIONS.reduce((byPlayer, position) => {
+    const player = gameState.players.find(candidate =>
+      candidate.position === position
+    );
+    byPlayer[position] = STANDARD_RANKS.reduce((byRank, rank) => {
+      byRank[rank] = player?.cards.filter(card =>
+        card.rank === rank && !playedCardIds.has(card.id)
+      ).length ?? 0;
+      return byRank;
+    }, {} as Record<GameRank, number>);
+    return byPlayer;
+  }, {} as Record<PlayerPosition, Record<GameRank, number>>);
+  const bottomKnownCards = gameState.players.find(
+    player => player.position === 'bottom'
+  )?.cards ?? [];
+  const bottomHandIsComplete = bottomKnownCards.length === getPlayerInitialCardCount(
+    getGameMode(gameState),
+    'bottom',
+    gameState.config.landlordPosition
+  );
 
   return STANDARD_RANKS.flatMap(rank => {
-    const playersWhoShowedRank = PLAYER_POSITIONS.filter(
-      position => playedRankCounts[position][rank] > 0
+    const hasShownRank = (position: PlayerPosition): boolean =>
+      playedRankCounts[position][rank] > 0 ||
+      knownRankCounts[position][rank] > 0;
+    const isExcludedByKnownAbsence = (position: PlayerPosition): boolean =>
+      position === 'bottom' &&
+      bottomHandIsComplete &&
+      knownRankCounts.bottom[rank] === 0 &&
+      playedRankCounts.bottom[rank] === 0;
+    const possibleOwners = activePositions.filter(position =>
+      !hasShownRank(position) && !isExcludedByKnownAbsence(position)
     );
-    if (playersWhoShowedRank.length !== 3) return [];
+    if (possibleOwners.length !== 1) return [];
 
-    const suspectedOwner = PLAYER_POSITIONS.find(
-      position => playedRankCounts[position][rank] === 0
-    );
+    const suspectedOwner = possibleOwners[0];
     if (!suspectedOwner || suspectedOwner === 'bottom') return [];
+
+    // 除疑似持有者外，其余对手都必须实际出过该点数；“我没有”只有在
+    // 当前模式的完整手牌已录入时才作为排除证据。
+    const opponentsWhoPlayed = activePositions.filter(position =>
+      position !== 'bottom' && playedRankCounts[position][rank] > 0
+    );
+    if (opponentsWhoPlayed.length < activePositions.length - 2) return [];
 
     const candidate = candidatesByRank.get(rank);
     if (!candidate || candidate.remainingCopies === 0) return [];
+    const knownElsewhere = activePositions
+      .filter(position => position !== suspectedOwner)
+      .reduce((total, position) => total + knownRankCounts[position][rank], 0);
+    const inferredCount = Math.max(
+      0,
+      candidate.remainingCopies - knownElsewhere
+    );
+    if (inferredCount === 0) return [];
     const estimate = candidate.playerEstimates[suspectedOwner];
-    const isKnown = estimate.knownCount > 0;
-    const posteriorProbability = isKnown
-      ? 1
-      : estimate.probabilityAtLeastOne;
-    const confidence: RankOwnershipClue['confidence'] = isKnown
-      ? 'known'
-      : posteriorProbability >= 0.8
+    const posteriorProbability = estimate.probabilityAtLeastOne;
+    const confidence: RankOwnershipClue['confidence'] =
+      posteriorProbability >= 0.8
         ? 'strong'
         : posteriorProbability >= 0.6
           ? 'likely'
@@ -255,12 +312,11 @@ const buildOwnershipClues = (
     return [{
       rank,
       suspectedOwner,
+      inferredCount,
       probability: posteriorProbability,
       confidence,
       evidenceCount: 3,
-      summary: isKnown
-        ? `三家都已打过${rankName}，且${ownerName}有已知${rankName}，归属已确认。`
-        : `三家都已打过${rankName}，只有${ownerName}尚未展示；场上仍剩${candidate.remainingCopies}张。未展示本身不是硬事实，按融合后验，${ownerName}持有至少1张约${formatPercent(posteriorProbability)}。`
+      summary: `三方已有${rankName}的确定信息或完整手牌排除证据，只有${ownerName}未被排除；扣除其他玩家已知未出牌后，将剩余${inferredCount}张${rankName}集中标红给${ownerName}。这是归属推理而非具体花色硬事实，${ownerName}持有至少1张的融合后验约${formatPercent(posteriorProbability)}。`
     }];
   }).sort((left, right) =>
     right.probability - left.probability ||

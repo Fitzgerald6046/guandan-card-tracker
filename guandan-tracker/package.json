@@ -9,7 +9,11 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test:inference": "esbuild scripts/inference-calibration.ts --bundle --platform=node --format=esm --outfile=node_modules/.tmp/inference-calibration.mjs && node node_modules/.tmp/inference-calibration.mjs",
-    "test:history": "esbuild scripts/game-history-retention-test.ts --bundle --platform=node --format=esm --define:import.meta.env.DEV=false --outfile=node_modules/.tmp/game-history-retention-test.mjs && node node_modules/.tmp/game-history-retention-test.mjs"
+    "test:history": "esbuild scripts/game-history-retention-test.ts --bundle --platform=node --format=esm --define:import.meta.env.DEV=false --outfile=node_modules/.tmp/game-history-retention-test.mjs && node node_modules/.tmp/game-history-retention-test.mjs",
+    "test:voice-turns": "esbuild scripts/voice-turn-inference-test.ts --bundle --platform=node --format=esm --outfile=node_modules/.tmp/voice-turn-inference-test.mjs && node node_modules/.tmp/voice-turn-inference-test.mjs",
+    "test:voice-command": "esbuild scripts/voice-command-test.ts --bundle --platform=node --format=esm --outfile=node_modules/.tmp/voice-command-test.mjs && node node_modules/.tmp/voice-command-test.mjs",
+    "test:inference-view": "esbuild scripts/inference-view-model-test.ts --bundle --platform=node --format=esm --outfile=node_modules/.tmp/inference-view-model-test.mjs && node node_modules/.tmp/inference-view-model-test.mjs",
+    "test:game-modes": "esbuild scripts/game-mode-test.ts --bundle --platform=node --format=esm --outfile=node_modules/.tmp/game-mode-test.mjs && node node_modules/.tmp/game-mode-test.mjs"
   },
   "dependencies": {
     "react": "^19.1.0",

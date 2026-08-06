@@ -18,9 +18,24 @@
     Content-Type = "application/json"
 
 [[headers]]
-  for = "/sw.js"
+  for = "/manifest.webmanifest"
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
+    Content-Type = "application/manifest+json"
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+    Pragma = "no-cache"
+    Expires = "0"
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+    Pragma = "no-cache"
+    Expires = "0"
     Content-Type = "text/javascript"
 
 [[headers]]

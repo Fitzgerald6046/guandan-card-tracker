@@ -12,6 +12,10 @@ import {
   PLAYER_DISPLAY_NAMES,
   getGameProgress
 } from '../utils/gameProgress';
+import {
+  getActivePlayerPositions,
+  getPlayerInitialCardCount
+} from '../utils/gameMode';
 import CardImage from './CardImage';
 
 export interface GameReplayTableProps {
@@ -39,12 +43,24 @@ interface ReplayFrame {
   }>;
 }
 
-const createInitialCardCounts = (): Record<PlayerPosition, number> => ({
-  bottom: 27,
-  left: 27,
-  top: 27,
-  right: 27
-});
+const createInitialCardCounts = (
+  gameRecord: GameRecord
+): Record<PlayerPosition, number> => {
+  const mode = gameRecord.gameMode ?? 'guandan';
+  return (['bottom', 'left', 'top', 'right'] as PlayerPosition[]).reduce(
+    (counts, position) => {
+      counts[position] = getActivePlayerPositions(mode).includes(position)
+        ? getPlayerInitialCardCount(
+          mode,
+          position,
+          gameRecord.landlordPosition
+        )
+        : 0;
+      return counts;
+    },
+    {} as Record<PlayerPosition, number>
+  );
+};
 
 const isPassAction = (record: PlayRecord | null): boolean =>
   Boolean(record && (record.type === 'pass' || record.cards.length === 0));
@@ -65,7 +81,13 @@ const buildReplayFrames = (gameRecord: GameRecord): ReplayFrame[] => {
     gameRecord.startingPlayerPosition ||
     history[0]?.playerPosition ||
     'bottom';
-  const cardCounts = createInitialCardCounts();
+  const gameMode = gameRecord.gameMode ?? 'guandan';
+  const progressRules = {
+    mode: gameMode,
+    landlordPosition: gameRecord.landlordPosition,
+    playerOrder: getActivePlayerPositions(gameMode)
+  };
+  const cardCounts = createInitialCardCounts(gameRecord);
   let visibleActions: ReplayFrame['visibleActions'] = [];
 
   const frames: ReplayFrame[] = [
@@ -100,7 +122,8 @@ const buildReplayFrames = (gameRecord: GameRecord): ReplayFrame[] => {
       }
     ];
     const progress = getGameProgress(
-      visibleActions.map(action => action.record)
+      visibleActions.map(action => action.record),
+      progressRules
     );
 
     frames.push({
@@ -148,6 +171,7 @@ export const GameReplayTable: React.FC<GameReplayTableProps> = ({
   replayState,
   onReplayControl
 }) => {
+  const gameMode = gameRecord.gameMode ?? 'guandan';
   const frames = useMemo(() => buildReplayFrames(gameRecord), [gameRecord]);
   const [isPlaying, setIsPlaying] = useState(false);
   const finalFrameIndex = Math.max(0, frames.length - 1);
@@ -203,8 +227,9 @@ export const GameReplayTable: React.FC<GameReplayTableProps> = ({
       currentFrame.currentAction?.playerPosition === position ||
       (currentFrameIndex === 0 && currentFrame.activePlayer === position);
     const finishIndex = currentFrame.finishOrder.indexOf(position);
-    const finishLabel =
-      finishIndex >= 0 ? FINISH_LABELS[finishIndex] : null;
+    const finishLabel = finishIndex >= 0
+      ? (gameMode === 'doudizhu' ? '胜出' : FINISH_LABELS[finishIndex])
+      : null;
 
     return (
       <div
@@ -226,6 +251,11 @@ export const GameReplayTable: React.FC<GameReplayTableProps> = ({
           <span className="truncate text-xs font-black tracking-wide text-slate-900">
             {PLAYER_DISPLAY_NAMES[position]}
           </span>
+          {gameMode === 'doudizhu' && gameRecord.landlordPosition === position && (
+            <span className="rounded-full bg-amber-500 px-1.5 py-0.5 text-[8px] font-black text-white">
+              地主
+            </span>
+          )}
           {finishLabel && (
             <span
               data-testid={`replay-finish-${position}`}
@@ -300,7 +330,9 @@ export const GameReplayTable: React.FC<GameReplayTableProps> = ({
             真实牌局回放
           </div>
           <div className="mt-0.5 text-[10px] font-medium text-emerald-100/70">
-            四方牌桌 · 打{RANK_DISPLAY_NAMES[gameRecord.currentRank]}
+            {gameMode === 'doudizhu'
+              ? `三人牌桌 · 地主${PLAYER_DISPLAY_NAMES[gameRecord.landlordPosition ?? 'bottom']}`
+              : `四方牌桌 · 打${RANK_DISPLAY_NAMES[gameRecord.currentRank]}`}
           </div>
         </div>
         <div
@@ -318,9 +350,11 @@ export const GameReplayTable: React.FC<GameReplayTableProps> = ({
         <div className="pointer-events-none absolute inset-4 rounded-[34px] border border-emerald-300/15" />
         <div className="pointer-events-none absolute left-1/2 top-1/2 h-48 w-48 -translate-x-1/2 -translate-y-1/2 rounded-full border border-emerald-200/10 bg-emerald-950/10 shadow-[0_0_50px_rgba(6,78,59,0.35)]" />
 
-        <div className="col-start-2 row-start-1">
-          {renderPlayer('top')}
-        </div>
+        {gameMode === 'guandan' && (
+          <div className="col-start-2 row-start-1">
+            {renderPlayer('top')}
+          </div>
+        )}
         <div className="col-start-1 row-start-2">
           {renderPlayer('right')}
         </div>
@@ -374,9 +408,13 @@ export const GameReplayTable: React.FC<GameReplayTableProps> = ({
         >
           <div className="text-xs font-black tracking-wide text-amber-950">
             本局结束
-            {currentFrame.winningTeam
-              ? ' · 同队包揽头游、二游'
-              : ' · 三游产生'}
+            {gameMode === 'doudizhu'
+              ? currentFrame.finishOrder[0] === gameRecord.landlordPosition
+                ? ' · 地主胜利'
+                : ' · 农民胜利'
+              : currentFrame.winningTeam
+                ? ' · 同队包揽头游、二游'
+                : ' · 三游产生'}
           </div>
           <div className="mt-1 flex flex-wrap justify-center gap-1">
             {currentFrame.finishOrder.slice(0, 3).map((position, index) => (
@@ -384,7 +422,7 @@ export const GameReplayTable: React.FC<GameReplayTableProps> = ({
                 key={position}
                 className="rounded-full border border-amber-200 bg-white px-2 py-0.5 text-[10px] font-black text-amber-900"
               >
-                {FINISH_LABELS[index]} · {PLAYER_DISPLAY_NAMES[position]}
+                {gameMode === 'doudizhu' ? '胜出' : FINISH_LABELS[index]} · {PLAYER_DISPLAY_NAMES[position]}
               </span>
             ))}
           </div>

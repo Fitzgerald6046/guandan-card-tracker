@@ -69,6 +69,10 @@ export class GuandanAIReasoningEngine {
     }
 
     const { allCards, players, currentPlayerPosition } = this.gameState;
+    const playerTeams = players.reduce((teams, player) => {
+      teams[player.position] = player.team;
+      return teams;
+    }, {} as Partial<Record<PlayerPosition, 1 | 2>>);
     const playedCards = new Set<string>();
     this.playHistory.forEach(record => record.cards.forEach(card => playedCards.add(card.id)));
 
@@ -85,7 +89,8 @@ export class GuandanAIReasoningEngine {
       players.reduce((counts, player) => {
         counts[player.position] = player.remainingCount;
         return counts;
-      }, {} as Partial<Record<PlayerPosition, number>>)
+      }, {} as Partial<Record<PlayerPosition, number>>),
+      playerTeams
     );
     // 第一遍只建立无行为先验；第二遍把限制选择似然真正送回概率模型。
     // 显式手牌/明牌已在 inferCardDistribution 内扣除，账本不会重复进账。
@@ -231,7 +236,9 @@ export class GuandanAIReasoningEngine {
       immediateRecommendations.push(decision.resourceWarning);
     }
     if (!currentLeadPlay && lastAction?.type === 'pass') {
-      immediateRecommendations.push('三家过牌后本轮已重置，可重新选择领牌牌型。');
+      immediateRecommendations.push(
+        `${Math.max(1, players.length - 1)}家过牌后本轮已重置，可重新选择领牌牌型。`
+      );
     }
     if (keyCardCounts.jokers.big + keyCardCounts.jokers.small >= 3) {
       immediateRecommendations.push('场外仍有至少3张王，单张和对子牌权风险较高。');
@@ -239,7 +246,10 @@ export class GuandanAIReasoningEngine {
     if (!currentLeadPlay) {
       const exploitablePass = passInferences.find(inference =>
         inference.status === 'active' &&
-        !isSameTeam(inference.playerPosition, currentPlayerPosition) &&
+        (playerTeams[inference.playerPosition] === undefined ||
+          playerTeams[currentPlayerPosition] === undefined
+          ? !isSameTeam(inference.playerPosition, currentPlayerPosition)
+          : playerTeams[inference.playerPosition] !== playerTeams[currentPlayerPosition]) &&
         inference.confidence >=
           PASS_INFERENCE_CONFIDENCE.displayLikelyThreshold
       );
@@ -281,6 +291,7 @@ export class GuandanAIReasoningEngine {
       recommendations: { immediate: immediateRecommendations },
       passInferences,
       cardDistribution,
+      baselineCardDistribution: baseCardDistribution,
       evidenceLedger,
       humanReasoning,
       endgameInference,
@@ -315,6 +326,13 @@ export class GuandanAIReasoningEngine {
       recommendations: { immediate: [] },
       passInferences: [],
       cardDistribution: {
+        informationCoverage: 0,
+        bombCandidates: [],
+        certainty: 0,
+        playerShapes: [],
+        appliedEvidenceCount: 0,
+      },
+      baselineCardDistribution: {
         informationCoverage: 0,
         bombCandidates: [],
         certainty: 0,

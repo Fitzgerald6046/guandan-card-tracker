@@ -349,10 +349,10 @@ function isConsecutivePairs(cards: Card[], currentRank: CardRank): CardType {
 }
 
 /**
- * 检查是否为钢板（三连三）
+ * 检查是否为钢板（两个连续三同张，例如333444）。
  */
 function isSteelBoard(cards: Card[], currentRank: CardRank): CardType {
-  if (cards.length !== 9) {
+  if (cards.length !== 6) {
     return { type: 'invalid', description: '不是钢板', isValid: false };
   }
 
@@ -375,7 +375,7 @@ function isSteelBoard(cards: Card[], currentRank: CardRank): CardType {
     }
   }
 
-  if (triples.length === 3) {
+  if (triples.length === 2) {
     // 级牌在钢板中归位为普通牌
     const sequenceValues = triples.map(rank => getSequenceValue(rank, currentRank)).sort((a, b) => a - b);
     
@@ -392,7 +392,7 @@ function isSteelBoard(cards: Card[], currentRank: CardRank): CardType {
       const maxRank = Math.max(...triples);
       return {
         type: 'steel_board',
-        description: '钢板（三连三）',
+        description: '钢板（两连三）',
         isValid: true,
         cardCount: 9,
         power: 60,

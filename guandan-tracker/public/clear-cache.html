@@ -79,26 +79,26 @@
         <h1>🔄 清除缓存工具</h1>
         
         <div class="instruction">
-            <strong>问题描述：</strong>刷新页面后，玩家名称修改、手牌输入按钮等新功能没有显示。
+            <strong>适用情况：</strong>刷新页面后仍显示旧界面，或者新部署的语音、牌型功能没有生效。
             <br><br>
-            <strong>原因：</strong>浏览器缓存了旧版本的代码和数据。
+            <strong>推荐操作：</strong>点击“更新程序（保留牌局）”，工具会注销旧 Service Worker 并删除程序缓存，不会清除历史牌局。
         </div>
 
         <div id="status"></div>
 
         <div style="text-align: center;">
-            <button class="button" onclick="clearLocalStorage()">清除本地数据</button>
-            <button class="button" onclick="clearAllCache()">清除所有缓存</button>
+            <button class="button success" onclick="clearProgramCache()">更新程序（保留牌局）</button>
+            <button class="button" onclick="clearLocalStorage()">清除本地牌局数据</button>
             <button class="button success" onclick="redirectToApp()">返回应用</button>
         </div>
 
         <div class="manual-steps">
-            <strong>手动清除缓存步骤：</strong>
+            <strong>手机手动清理方法：</strong>
             <ol>
-                <li>按 <kbd>Ctrl+Shift+R</kbd> (Windows/Linux) 或 <kbd>Cmd+Shift+R</kbd> (Mac) 强制刷新</li>
-                <li>或者按 <kbd>F12</kbd> 打开开发者工具</li>
-                <li>右键点击刷新按钮，选择"清空缓存并硬性重新加载"</li>
-                <li>在 Application/应用 标签下，清除 Local Storage 中的数据</li>
+                <li><strong>iPhone/iPad Chrome：</strong>点击右上角“…” → “删除浏览数据” → 时间范围选“所有时间” → 只勾选“Cookie、网站数据”和“缓存的图片和文件” → 删除。Chrome iOS 没有地址栏锁头按钮，并且会同时清理其他网站数据。</li>
+                <li><strong>iPhone/iPad Safari：</strong>系统“设置” → “App” → “Safari 浏览器” → “高级” → “网站数据”，搜索 <code>pixelforgeai.com.cn</code>，向左滑动删除。</li>
+                <li><strong>已添加到主屏幕：</strong>先删除旧桌面图标，清理并确认网页更新后，再重新添加。</li>
+                <li><strong>电脑：</strong>按 <kbd>Ctrl+Shift+R</kbd>（Windows/Linux）或 <kbd>Cmd+Shift+R</kbd>（Mac）强制刷新。</li>
             </ol>
         </div>
     </div>
@@ -112,42 +112,40 @@
         }
 
         function clearLocalStorage() {
+            const confirmed = window.confirm(
+                '这会删除当前牌局、历史记录和本机设置，且无法恢复。确认继续吗？'
+            );
+            if (!confirmed) return;
+
             try {
-                // 清除掼蛋记牌器相关的localStorage数据
-                const keysToRemove = [
-                    'guandan_game_state',
-                    'guandan_user_preferences', 
-                    'guandan_game_stats',
-                    'guandan_game_history'
-                ];
-                
-                keysToRemove.forEach(key => {
-                    localStorage.removeItem(key);
-                });
-                
-                showStatus('✅ 本地数据已清除！请返回应用查看效果。');
+                localStorage.clear();
+                sessionStorage.clear();
+                showStatus('✅ 本地牌局数据已清除。');
             } catch (error) {
                 showStatus('❌ 清除本地数据失败：' + error.message, false);
             }
         }
 
-        function clearAllCache() {
+        async function clearProgramCache() {
             try {
-                // 清除localStorage
-                localStorage.clear();
-                
-                // 清除sessionStorage
-                sessionStorage.clear();
-                
-                showStatus('✅ 所有缓存数据已清除！建议按 Ctrl+Shift+R 强制刷新页面。');
-                
-                // 3秒后自动跳转并强制刷新
+                // 只清程序缓存，不动 localStorage 中的当前牌局和历史记录。
+                if ('serviceWorker' in navigator) {
+                    const registrations = await navigator.serviceWorker.getRegistrations();
+                    await Promise.all(registrations.map(registration => registration.unregister()));
+                }
+
+                if ('caches' in window) {
+                    const cacheNames = await caches.keys();
+                    await Promise.all(cacheNames.map(cacheName => caches.delete(cacheName)));
+                }
+
+                showStatus('✅ 程序缓存和旧 Service Worker 已清除，牌局数据已保留。正在加载最新版。');
+
                 setTimeout(() => {
-                    window.location.href = '/?_t=' + Date.now();
-                }, 3000);
-                
+                    window.location.replace('/?_t=' + Date.now());
+                }, 1800);
             } catch (error) {
-                showStatus('❌ 清除缓存失败：' + error.message, false);
+                showStatus('❌ 清除程序缓存失败：' + error.message, false);
             }
         }
 

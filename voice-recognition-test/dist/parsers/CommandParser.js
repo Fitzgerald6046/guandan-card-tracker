@@ -1,7 +1,3 @@
-/**
- * 指令解析器
- * 将语音识别的文本转换为结构化的游戏指令
- */
 export class CommandParser {
     constructor(config) {
         this.config = config;
